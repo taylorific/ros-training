@@ -581,9 +581,24 @@ export ROS_APT_SOURCE_VERSION=$(
 
 # Download the keyring package
 . /etc/os-release
-curl -L -o /tmp/ros2-apt-source.deb \
-  "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${UBUNTU_CODENAME:-$VERSION_CODENAME}_all.deb"
+curl -L \
+  -o /tmp/ros2-apt-source.deb \
+  "https://github.com/ros-infrastructure/ros-apt-source/releases/download/\
+${ROS_APT_SOURCE_VERSION}/\
+ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${UBUNTU_CODENAME:-$VERSION_CODENAME}_all.deb"
 
 sudo dpkg -i /tmp/ros2-apt-source.deb
+```
+
+```bash
+# Extract the key from the deb
+dpkg-deb -x ros2-apt-source_*.deb tmp/
+sudo cp tmp/usr/share/keyrings/ros-archive-keyring.gpg /usr/share/keyrings/
+# Install the keyring
+sudo install -m 644 ros-archive-keyring.gpg /usr/share/keyrings/
+# Point at a local mirror
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+http://mirror.local/ros2 jammy main" | \
+sudo tee /etc/apt/sources.list.d/ros2.list
 ```
 
