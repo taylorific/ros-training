@@ -352,3 +352,111 @@ curl -LO \
   https://crake-nexus.org.boxcutter.net/repository/ubuntu-cloud-images-proxy/noble/current/noble-server-cloudimg-amd64.img
 ```
 -->
+
+---
+hideInToc: true
+---
+
+# Define login parameters for cloud-init ISO (1 of 2)
+
+```bash
+touch network-config
+
+cat >meta-data <<EOF
+instance-id: ubuntu-server-2404
+local-hostname: ubuntu-server-2404
+EOF
+```
+
+---
+hideInToc: true
+---
+
+# Define login parameters for cloud-init ISO (2 of 2)
+
+```bash
+cat >user-data <<EOF
+#cloud-config
+hostname: ubuntu-server-2404
+users:
+  - name: autobot
+    uid: 63112
+    primary_group: users
+    groups: users
+    shell: /bin/bash
+    plain_text_passwd: superseekret
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+chpasswd: { expire: False }
+ssh_pwauth: True
+package_update: False
+package_upgrade: false
+packages:
+  - qemu-guest-agent
+growpart:
+  mode: auto
+  devices: ['/']
+power_state:
+  mode: reboot
+EOF
+```
+
+---
+hideInToc: true
+---
+
+# Generate cloud-init ISO
+
+```bash
+sudo apt-get update
+sudo apt-get install genisoimage
+```
+
+```bash
+$ genisoimage \
+    -input-charset utf-8 \
+    -output ubuntu-server-2404-cloud-init.img \
+    -volid cidata -rational-rock -joliet \
+    user-data meta-data network-config
+
+sudo cp ubuntu-server-2404-cloud-init.img \
+  /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso
+```
+
+Alternative way with cloud-localds:
+
+```bash
+sudo apt-get update
+sudo apt-get install cloud-image-utils
+```
+
+```bash
+sudo cloud-localds \
+  /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso \
+  user-data meta-data \
+  --verbose
+```
+
+---
+hideInToc: true
+---
+
+# Spin up image and configure with cloud-init
+
+```bash
+virt-install \
+  --connect qemu:///system \
+  --name ubuntu-server-2404 \
+  --boot uefi \
+  --memory 8192 \
+  --vcpus 2 \
+  --os-variant ubuntu24.04 \
+  --disk /var/lib/libvirt/images/ubuntu-server-2404.qcow2,bus=virtio \
+  --disk /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso,device=cdrom \
+  --network network=default,model=virtio \
+  --graphics spice \
+  --noautoconsole \
+  --console pty,target_type=serial \
+  --import \
+  --debug
+```
