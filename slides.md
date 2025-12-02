@@ -147,3 +147,19 @@ $ sudo virsh net-define /tmp/host-network.xml
 $ sudo virsh net-start host-network
 $ sudo virsh net-autostart host-network
 ```
+
+---
+hideInToc: true
+---
+
+# Create a definition for the host network (2 of 2)
+
+Verify
+
+```bash
+$ virsh net-list --all
+ Name           State    Autostart   Persistent
+-------------------------------------------------
+ default        active   yes         yes
+ host-network   active   yes         yes
+```
