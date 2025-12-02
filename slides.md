@@ -61,7 +61,7 @@ routeAlias: toc
 layout: section
 ---
 
-# Create Ubuntu 24.04 VM for Testing
+# Install and configure libvirt
 
 <br>
 <br>
@@ -162,4 +162,153 @@ $ virsh net-list --all
 -------------------------------------------------
  default        active   yes         yes
  host-network   active   yes         yes
+```
+
+---
+hideInToc: true
+---
+
+# macvtap
+
+Create XML definition (optional)
+
+```bash
+cat <<EOF > /tmp/macvtap-network.xml
+<network>
+  <name>macvtap-network</name>
+  <forward mode="bridge">
+    <interface dev="eno1"/>
+  </forward>
+</network>
+EOF
+```
+
+Configure
+
+```bash
+$ virsh net-define /tmp/macvtap-network.xml
+$ virsh net-start macvtap-network
+$ virsh net-autostart macvtap-network
+```
+
+---
+hideInToc: true
+---
+
+Verify
+```bash
+$ virsh net-list
+ Name              State    Autostart   Persistent
+----------------------------------------------------
+ default           active   yes         yes
+ macvtap-network   active   yes         yes
+```
+
+---
+hideInToc: true
+---
+
+# Image pool
+
+```bash
+$ virsh pool-define-as \
+    --name default \
+    --type dir \
+    --target /var/lib/libvirt/images
+$ virsh pool-build default
+$ virsh pool-start default
+$ virsh pool-autostart default
+```
+
+```bash
+$ virsh pool-list --all
+$ virsh vol-list --pool default --details
+```
+
+---
+hideInToc: true
+---
+
+# cloud-init image pool
+
+Note: There is a `--cloud-init` parameter for virt-install to auto-generate the
+cloud-init ISO. However there's currently a bug in virt-install <= 4.1.0 that
+makes it usuable. So we manage the lifecycle manually.
+https://github.com/virt-manager/virt-manager/issues/178
+
+```bash
+$ virsh pool-define-as \
+    --name boot-scratch \
+    --type dir \
+    --target /var/lib/libvirt/boot
+$ virsh pool-build boot-scratch
+$ virsh pool-start boot-scratch
+$ virsh pool-autostart boot-scratch
+```
+
+```bash
+$ virsh pool-list --all
+$ virsh vol-list --pool boot-scratch --details
+```
+
+---
+hideInToc: true
+---
+
+# ISO image pool
+
+```bash
+$ virsh pool-define-as \
+    --name iso \
+    --type dir \
+    --target /var/lib/libvirt/iso
+$ virsh pool-build iso
+$ virsh pool-start iso
+$ virsh pool-autostart iso
+```
+
+```bash
+$ virsh pool-list --all
+$ virsh vol-list --pool iso --details
+```
+
+---
+layout: section
+---
+
+# Spin up your first VM
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
+hideInToc: true
+---
+
+# Verify host resources
+
+```bash
+$ virsh nodeinfo
+CPU model:           x86_64
+CPU(s):              12
+CPU frequency:       3799 MHz
+CPU socket(s):       1
+Core(s) per socket:  6
+Thread(s) per core:  2
+NUMA cell(s):        1
+Memory size:         65699300 KiB
+```
+
+```bash
+$ df -h
+Filesystem                         Size  Used Avail Use% Mounted on
+tmpfs                              6.3G  2.4M  6.3G   1% /run
+/dev/mapper/ubuntu--vg-ubuntu--lv  1.8T   16G  1.7T   1% /
+tmpfs                               32G     0   32G   0% /dev/shm
+tmpfs                              5.0M   12K  5.0M   1% /run/lock
+efivarfs                           192K   69K  119K  37% /sys/firmware/efi/efivars
+tmpfs                               32G     0   32G   0% /run/qemu
+/dev/nvme2n1p2                     2.0G  103M  1.7G   6% /boot
+/dev/nvme2n1p1                     1.1G  6.2M  1.1G   1% /boot/efi
 ```
