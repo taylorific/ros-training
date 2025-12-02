@@ -312,3 +312,43 @@ tmpfs                               32G     0   32G   0% /run/qemu
 /dev/nvme2n1p2                     2.0G  103M  1.7G   6% /boot
 /dev/nvme2n1p1                     1.1G  6.2M  1.1G   1% /boot/efi
 ```
+
+---
+hideInToc: true
+---
+
+# Create directory for config files (optional)
+
+```bash
+mkdir ubuntu-server-2404
+cd ubuntu-server-2404
+```
+
+---
+hideInToc: true
+---
+
+# Download cloud image template and resize
+
+```bash
+$ curl -LO \
+    https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+$ qemu-img info noble-server-cloudimg-amd64.img
+```
+
+```bash
+$ sudo qemu-img convert \
+    -f qcow2 -O qcow2 \
+    noble-server-cloudimg-amd64.img \
+    /var/lib/libvirt/images/ubuntu-server-2404.qcow2
+$ sudo qemu-img resize -f qcow2 \
+    /var/lib/libvirt/images/ubuntu-server-2404.qcow2 \
+    64G
+```
+
+<!--
+```
+curl -LO \
+  https://crake-nexus.org.boxcutter.net/repository/ubuntu-cloud-images-proxy/noble/current/noble-server-cloudimg-amd64.img
+```
+-->
