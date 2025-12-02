@@ -460,3 +460,121 @@ virt-install \
   --import \
   --debug
 ```
+
+---
+hideInToc: true
+---
+
+# Virtual machine console
+
+```bash
+# Command line console
+virsh console ubuntu-server-2404
+
+# Graphical console
+virt-viewer ubuntu-server-2404
+```
+
+---
+hideInToc: true
+---
+
+# Disable cloud-init and remove cloud-init ISO
+
+In the guest:
+```bash
+# login with autobot user
+$ cloud-init status --wait
+status: done
+
+# Disable cloud-init
+$ sudo touch /etc/cloud/cloud-init.disabled
+
+$ cloud-init status
+status: disabled
+$ sudo shutdown -h now
+```
+
+On the host
+```bash
+$ virsh domblklist ubuntu-server-2404
+$ virsh change-media ubuntu-server-2404 sda --eject
+$ sudo rm /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso
+```
+
+
+---
+hideInToc: true
+---
+
+
+# Snapshots
+
+```bash
+$ virsh snapshot-create-as --domain ubuntu-server-2404 --name clean --description "Initial install"
+$ virsh snapshot-list ubuntu-server-2404
+$ virsh snapshot-revert ubuntu-server-2404 clean
+$ virsh snapshot-delete ubuntu-server-2404 clean
+```
+
+# Cleanup
+
+```bash
+$ virsh shutdown ubuntu-server-2404
+$ virsh undefine ubuntu-server-2404 --nvram --remove-all-storage
+```
+
+---
+hideInToc: true
+---
+
+# Get IP of virtual machine
+
+Preferred - use qemu-guest-agent
+
+```bash
+virsh start ubuntu-server-2404
+
+virsh list --all
+```
+
+```
+$ virsh domifaddr ubuntu-server-2404 --source agent
+```
+
+---
+hideInToc: true
+---
+
+```bash
+# Check for UTF-8
+$ locale charmap
+UTF-8
+
+# Set locale to UTF-8 if not set
+sudo apt update && sudo apt install locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+```
+
+---
+hideInToc: true
+---
+
+```bash
+apt-cache policy | grep universe
+````
+
+---
+hideInToc: true
+---
+
+```bash
+sudo apt-get update
+sudo apt install ca-certificates curl
+export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}')
+curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb"
+sudo dpkg -i /tmp/ros2-apt-source.deb
+```
+
