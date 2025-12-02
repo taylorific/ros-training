@@ -95,3 +95,29 @@ Be sure to reboot!!!!
 ```bash
 sudo reboot
 ```
+
+--
+hideInToc: true
+---
+
+# Validate config
+
+```bash
+$ virt-host-validate qemu
+```
+
+X86_64-based machines will likely display a warning about cgroup devices controller support not being enabled. This allows you to apply resource management to virtual machines. For more information refer to this doc. To add cgroup 'devices' controller support, edit /etc/default/grub and change the line that looks like GRUB_CMDLINE_LINUX_DEFAULT="quiet splash" to:
+
+```bash
+# GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on systemd.unified_cgroup_hierarchy=0"
+```
+
+```bash
+# amd
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash amd_iommu=on iommu=pt systemd.unified_cgroup_hierarchy=0"
+```
+
+```bash
+sudo update-grub
+```
