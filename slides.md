@@ -72,3 +72,26 @@ hideInToc: true
 ---
 
 # Install QEMU/KVM on Ubuntu 24.04
+
+Install QEMU/KVM and libvirtd
+
+```bash
+sudo apt-get update
+sudo apt-get install qemu-kvm libvirt-daemon-system
+sudo apt-get install virtinst
+```
+
+Make sure the current user is a member of the libvirt and kvm groups
+
+```bash
+$ sudo adduser $(id -un) libvirt
+Adding user '<username>' to group 'libvirt' ...
+$ sudo adduser $(id -un) kvm
+Adding user '<username>' to group 'kvm' ...
+```
+
+Be sure to reboot!!!!
+
+```bash
+sudo reboot
+```
