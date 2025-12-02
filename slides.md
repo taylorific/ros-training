@@ -61,7 +61,7 @@ routeAlias: toc
 layout: section
 ---
 
-# Install and configure libvirt
+# Create Ubuntu 24.04 VM for Testing
 
 <br>
 <br>
@@ -120,4 +120,46 @@ GRUB_CMDLINE_LINUX_DEFAULT="quiet splash amd_iommu=on iommu=pt systemd.unified_c
 
 ```bash
 sudo update-grub
+```
+
+---
+hideInToc: true
+---
+
+# Create a definition for the host network (1 of 2)
+
+Create XML definition
+
+```bash
+cat <<EOF > /tmp/host-network.xml
+<network>
+  <name>host-network</name>
+  <forward mode="bridge"/>
+  <bridge name="br0" />
+</network>
+EOF
+```
+
+Configure
+
+```bash
+$ sudo virsh net-define /tmp/host-network.xml
+$ sudo virsh net-start host-network
+$ sudo virsh net-autostart host-network
+```
+
+---
+hideInToc: true
+---
+
+# Create a definition for the host network (2 of 2)
+
+Verify
+
+```bash
+$ virsh net-list --all
+ Name           State    Autostart   Persistent
+-------------------------------------------------
+ default        active   yes         yes
+ host-network   active   yes         yes
 ```
