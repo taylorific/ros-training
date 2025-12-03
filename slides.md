@@ -602,6 +602,7 @@ curl -L \
 ${ROS_APT_SOURCE_VERSION}/\
 ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${UBUNTU_CODENAME:-$VERSION_CODENAME}_all.deb"
 
+# Install only if you want to point at the upstream repos
 sudo dpkg -i /tmp/ros2-apt-source.deb
 ```
 
@@ -612,14 +613,22 @@ hideInToc: true
 # If you have a custom mirror
 
 ```bash
+# Look at the deb contents
+dpkg-deb --contents /tmp/ros2-apt-source.deb
 # Extract the key from the deb
-dpkg-deb -x ros2-apt-source_*.deb tmp/
-sudo cp tmp/usr/share/keyrings/ros-archive-keyring.gpg /usr/share/keyrings/
+mkdir -p /tmp/ros2-apt-source
+dpkg-deb -x /tmp/ros2-apt-source.deb /tmp/ros2-apt-source
 # Install the keyring
-sudo install -m 644 ros-archive-keyring.gpg /usr/share/keyrings/
+sudo install -m 644 \
+  /tmp/ros2-apt-source/usr/share/keyrings/ros2-archive-keyring.gpg \
+  /usr/share/keyrings/
 # Point at a local mirror
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
-http://mirror.local/ros2 jammy main" | \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] \
+http://mirror.local/ros2 noble main" | \
+sudo tee /etc/apt/sources.list.d/ros2.list
+
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] \
+http://crake-nexus.org.boxcutter.net/repository/ros-apt-proxy noble main" | \
 sudo tee /etc/apt/sources.list.d/ros2.list
 ```
 
