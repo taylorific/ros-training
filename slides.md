@@ -668,6 +668,8 @@ grep -qxF 'source /opt/ros/jazzy/setup.bash' ~/.bashrc || \
 hideInToc: true
 ---
 
+# Test ROS 2 Install
+
 ```bash
 tmux
 # Ctrl+B " - Split the window horizontally
@@ -682,4 +684,29 @@ ros2 run demo_nodes_cpp listener
 tmux new-session -d -s ros "ros2 run demo_nodes_cpp talker" \; \
   split-window -v "ros2 run demo_nodes_cpp listener" \; \
   attach -t ros
+```
+
+---
+hideInToc: true
+---
+
+# Create ROS 2 Workspace
+
+```bash
+cd
+mkdir ros2_ws
+cd ros2_ws
+mkdir src
+cd
+cd ros2_ws
+colcon build
+$ ls install
+COLCON_IGNORE		  local_setup.bash  local_setup.zsh  setup.sh
+_local_setup_util_ps1.py  local_setup.ps1   setup.bash	     setup.zsh
+_local_setup_util_sh.py   local_setup.sh    setup.ps1
+```
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
 ```
