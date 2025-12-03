@@ -708,7 +708,7 @@ hideInToc: true
 
 # Workspace
 
-A workspace is a __local build environment__. It is intended to be ephemeral. The workspace stores build artifacts and should never be committed to source control:
+A workspace is a __local build environment__. It is intended to be disposable. The workspace stores build artifacts and should never be committed to source control:
 
 ```
 ros_ws/
@@ -717,13 +717,6 @@ ros_ws/
   install/   # Final artifacts. DO NOT commit (generated)
   log/       # Logs. DO NOT commit (generated)
 ```
-
-It works like:
-- `build/` from a CMake project
-- `venv/` from a Python project
-- `node_modules/` from a JavaScript project.
-
-Same idea.
 
 ---
 hideInToc: true
@@ -755,6 +748,92 @@ You need a build tool that:
 - Lets you re-build incrementally without breaking other packages
 
 CMake alone doesn't do this, colcon does.
+
+---
+hideInToc: true
+---
+
+# Relation between a workspace and source control
+
+A ROS workspace is like a CMake build directory on steroids. You would never check in:
+
+- `build/` from a CMake project
+- `venv/` from a Python project
+- `node_modules/` from a JavaScript project
+
+Same idea.
+
+The only “real” part of the workspace is the `src/` tree.
+
+---
+hideInToc: true
+---
+
+# What you should put in source control
+
+Inside `src/`, each ROS package is just a normal project folder.
+
+```
+ros_ws/
+  src/
+    my_robot_description/
+    my_robot_bringup/
+    my_sensor_driver/
+    slam_utils/
+```
+
+These go into source control as:
+- Individual repos OR
+- A single monorepo
+
+---
+hideInToc: true
+---
+
+# What NOT to put in source control
+
+Add this to your `.gitignore` in the root of your workspace:
+
+```
+build/
+install/
+log/
+.colcon/
+```
+
+Why?
+
+- These contain paths that depend on your local system (`/home/taylor/.../ros_ws/`)
+- They change on every build
+- They break reproducibility
+- They are very large and binary
+- They cause meaningless merge conflicts
+
+---
+hideInToc: true
+---
+
+# Good source control workflow
+
+## Option 1: One repo per package
+
+```
+src/
+  my_pkg      # git clone https://github.com/.../my_pkg.git
+  nav_utils   # git clone https://github.com/.../nav_utils.git
+```
+
+## Option 2: Monorepo
+
+```
+src/
+  my_robot/
+    package1/
+    package2/
+    package3/
+```
+
+Both are valid. Colcon works with either
 
 ---
 hideInToc: true
@@ -831,3 +910,67 @@ colcon build \
   --packages-select \
   example_cpp_pkg
 ```
+
+---
+hideInToc: true
+---
+
+# Workspace definition files
+
+ROS Projects often include a directory like:
+
+```
+workspaces/
+   desktop.yaml
+   simulation.yaml
+   full-stack.yaml
+   dev.yaml
+```
+
+Inside each file is a `vcstool (vcs)` “repos file” - a YAML mapping of repositories to clone.
+
+Example (very common pattern):
+
+```
+repositories:
+  navigation2:
+    type: git
+    url: https://github.com/ros-planning/navigation2.git
+    version: humble
+  slam_toolbox:
+    type: git
+    url: https://github.com/SteveMacenski/slam_toolbox.git
+    version: main
+```
+
+You’d use it like:
+
+```
+vcs import src < workspaces/full-stack.yaml
+```
+
+This populates the `src/` folder with all the required ROS packages.
+
+---
+hideInToc: true
+---
+
+# Why some ROS projects include multiple workspace YAML definitions
+
+Many large ROS projects support multiple build configurations:
+	•	minimal workspace (core libraries only)
+	•	desktop workspace (URDF, RViz, perception, etc.)
+	•	simulation workspace (Gazebo/Ignition/Isaac Sim plugins)
+	•	full-stack workspace (drivers + SLAM + navigation)
+
+Each one is defined by a separate `.yaml` or `.repos` file.
+
+This lets a developer do:
+
+```
+vcs import src < workspaces/simulation.yaml
+colcon build
+```
+
+or a different configuration later.
+
