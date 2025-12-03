@@ -650,3 +650,36 @@ sudo apt-get install ros-jazzy-desktop
 sudo apt-get install ros-jazzy-ros-base
 ```
 
+---
+hideInToc: true
+---
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2
+```
+
+```bash
+grep -qxF 'source /opt/ros/jazzy/setup.bash' ~/.bashrc || \
+  echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
+```
+
+---
+hideInToc: true
+---
+
+```bash
+tmux
+# Ctrl+B " - Split the window horizontally
+# Ctrl+B o - Cycle panes
+ros2 run demo_nodes_cpp talker
+# Ctrl+B o - Cycle panes
+ros2 run demo_nodes_cpp listener
+# Ctrl+B c
+```
+
+```bash
+tmux new-session -d -s ros "ros2 run demo_nodes_cpp talker" \; \
+  split-window -v "ros2 run demo_nodes_cpp listener" \; \
+  attach -t ros
+```
