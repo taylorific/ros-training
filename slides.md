@@ -690,6 +690,76 @@ tmux new-session -d -s ros "ros2 run demo_nodes_cpp talker" \; \
 hideInToc: true
 ---
 
+# Package
+
+A package is a small standalone project.
+
+A ROS package is a source-level project directory with metadata, declared with `package.xml`.  It is a folder, not a binary. It is the __source unit of compilation__.
+
+A package is NOT:
+- ❌ a .deb
+- ❌ an .rpm
+- ❌ a system package
+- ❌ something you install with apt or dnf
+
+---
+hideInToc: true
+---
+
+# Workspace
+
+A workspace is a __local build environment__. It is intended to be ephemeral. The workspace stores build artifacts and should never be committed to source control:
+
+```
+ros_ws/
+  src/       # All packages (each has its own build system)
+  build/     # Per-package build directories. DO NOT commit (generated)
+  install/   # Final artifacts. DO NOT commit (generated)
+  log/       # Logs. DO NOT commit (generated)
+```
+
+It works like:
+- `build/` from a CMake project
+- `venv/` from a Python project
+- `node_modules/` from a JavaScript project.
+
+Same idea.
+
+---
+hideInToc: true
+---
+
+# Colcon
+
+Colcon is a command line tool used to build and test ROS packages. It sits above CMake and builds many packages together, optimizing parallelism.
+
+Think of it like:
+- make -> builds a single target
+- cmake -> generates the build system for a single project
+- colon -> builds a whole tree of CMake, Python, and other package types together, handling ordering, isolation, environment setup and build metadata.
+
+---
+hideInToc: true
+---
+
+# Why ROS needs something like colcon
+
+ROS workspaces typically contain dozens to hundreds of packages, each possibily depending on others. Some might use CMake, some plain Python, some other tools.
+
+You need a build tool that:
+- Figures out which packages depend on what
+- Builds them in the correct order
+- Isolates build/test/install outputs
+- Generates environment scripts
+- Works constently across languages
+- Lets you re-build incrementally without breaking other packages
+
+CMake alone doesn't do this, colcon does.
+
+---
+hideInToc: true
+---
+
 # Create a workspace
 
 ```bash
@@ -722,6 +792,27 @@ ros2 pkg create \
 colcon build \
   --packages-select \
   example_python_pkg
+```
+
+---
+hideInToc: true
+---
+
+# Python package structure
+
+- `package.xml` file containing meta information about the package
+- `resource/<package_name>` marker file for the package
+- `setup.cfg` is required when a package has executables, so `ros2 run` can find them
+- `setup.py` containing instructions for how to install the package
+- `<package_name>` - a directory with the same name as your package, used by ROS 2 tools to find your package, contains `__init__.py`
+
+```
+my_package/
+      package.xml
+      resource/my_package
+      setup.cfg
+      setup.py
+      my_package/
 ```
 
 ---
