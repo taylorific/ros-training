@@ -729,7 +729,7 @@ Colcon is a command line tool used to build and test ROS packages. It sits above
 Think of it like:
 - make -> builds a single target
 - cmake -> generates the build system for a single project
-- colon -> builds a whole tree of CMake, Python, and other package types together, handling ordering, isolation, environment setup and build metadata.
+- colcon -> builds a whole tree of CMake, Python, and other package types together, handling ordering, isolation, environment setup and build metadata.
 
 ---
 hideInToc: true
@@ -865,9 +865,10 @@ hideInToc: true
 ```bash
 cd ~/ros2_ws/src
 ros2 pkg create \
+  example_python_pkg \
   --build-type ament_python \
-  --dependencies rclpy \
-  example_python_pkg
+  --license Apache-2.0 \
+  --dependencies rclpy
 colcon build \
   --packages-select \
   example_python_pkg
@@ -903,12 +904,34 @@ hideInToc: true
 ```bash
 cd ~/ros2_ws/src
 ros2 pkg create \
+  example_cpp_pkg \
   --build-type ament_cmake \
-  --dependencies rclcpp \
-  example_cpp_pkg
+  --license Apache-2.0 \
+  --dependencies rclcpp
 colcon build \
   --packages-select \
   example_cpp_pkg
+```
+
+---
+hideInToc: true
+---
+
+# C++ package structure
+
+```
+- `CMakeLists.txt` file that describes how to build the code within the package
+- `include/<package_name>` directory containing the public headers for the package
+- `package.xml` file containing meta information about the package
+- `src` directory containing the source code for the package
+```
+
+```
+my_package/
+     CMakeLists.txt
+     include/my_package/
+     package.xml
+     src/
 ```
 
 ---
