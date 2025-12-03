@@ -507,7 +507,6 @@ $ sudo rm /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso
 hideInToc: true
 ---
 
-
 # Snapshots
 
 ```bash
@@ -543,8 +542,20 @@ $ virsh domifaddr ubuntu-server-2404 --source agent
 ```
 
 ---
+layout: section
+---
+
+# Install ROS 2 Jazzy on Ubuntu 24.04
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
 hideInToc: true
 ---
+
+# Set locale to UTF-8
 
 ```bash
 # Check for UTF-8
@@ -562,6 +573,8 @@ export LANG=en_US.UTF-8
 hideInToc: true
 ---
 
+# Ensure that the Ubuntu Universe repository is enabled
+
 ```bash
 apt-cache policy | grep universe
 ````
@@ -569,6 +582,8 @@ apt-cache policy | grep universe
 ---
 hideInToc: true
 ---
+
+# Add the ros repository to apt sources
 
 ```bash
 sudo apt-get update
@@ -590,6 +605,12 @@ ros2-apt-source_${ROS_APT_SOURCE_VERSION}.${UBUNTU_CODENAME:-$VERSION_CODENAME}_
 sudo dpkg -i /tmp/ros2-apt-source.deb
 ```
 
+---
+hideInToc: true
+---
+
+# If you have a custom mirror
+
 ```bash
 # Extract the key from the deb
 dpkg-deb -x ros2-apt-source_*.deb tmp/
@@ -600,5 +621,23 @@ sudo install -m 644 ros-archive-keyring.gpg /usr/share/keyrings/
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
 http://mirror.local/ros2 jammy main" | \
 sudo tee /etc/apt/sources.list.d/ros2.list
+```
+
+---
+hideInToc: true
+---
+
+```bash
+# Install development tools
+sudo apt-get update
+sudo apt-get install ros-dev-tools
+
+# Packages are upgraded every month for ROS 2
+sudo apt-get update
+sudo apt-get upgrade
+# Desktop install
+sudo apt-get install ros-jazzy-desktop
+# Bare bones
+sudo apt-get install ros-jazzy-ros-base
 ```
 
