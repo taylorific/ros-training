@@ -654,6 +654,30 @@ sudo apt-get install ros-jazzy-ros-base
 hideInToc: true
 ---
 
+# Uninstall
+
+```bash
+sudo apt-get remove ~nros-jazzy-*
+sudo apt-get autoremove
+
+# Remove the repository
+sudo apt remove ros2-apt-source
+sudo apt update
+sudo apt autoremove
+sudo apt upgrade # Consider upgrading for packages previously shadowed.
+```
+
+---
+hideInToc: true
+---
+
+```bash
+# Create user for ROS
+sudo useradd --create-home --shell /bin/bash ros
+echo "ros ALL=(ALL:ALL) NOPASSWD: ALL" | sudo tee "/etc/sudoers.d/dont-prompt-ros-for-sudo-password"
+sudo su - ros
+```
+
 ```bash
 source /opt/ros/jazzy/setup.bash
 ros2
