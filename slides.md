@@ -946,13 +946,14 @@ ros2 pkg create \
   --build-type ament_cmake \
   --license Apache-2.0 \
   --dependencies rclcpp
+cd ~/ros2_ws
 colcon build \
   --packages-select \
   hello_cpp_pkg
 
 ros2 pkg list | grep hello_cpp_pkg
 source ~/ros2_ws/install/setup.bash
-ros2 pkg list | grep hello_python_pkg
+ros2 pkg list | grep hello_cpp_pkg
 ```
 
 ---
@@ -974,6 +975,76 @@ my_package/
      include/my_package/
      package.xml
      src/
+```
+
+---
+hideInToc: true
+---
+
+# C++ hello world node
+
+```bash
+cat >~/ros2_ws/src/hello_cpp_pkg/src/hello_node.cpp <<EOF
+#include <rclcpp/rclcpp.hpp>
+
+int main(int argc, char * argv[])
+{
+    rclcpp::init(argc, argv);
+
+    auto node = std::make_shared<rclcpp::Node>("hello_node");
+
+    RCLCPP_INFO(node->get_logger(), "Hello, world! ");
+
+    // Keep spinning so the node stays alive (optional for one-time logging)
+    rclcpp::spin(node);
+
+    rclcpp::shutdown();
+    return 0;
+}
+EOF
+```
+
+---
+hideInToc: true
+---
+
+# Add executable and install rule to CMakeLists.txt
+
+```bash
+cat >~/ros2_ws/src/hello_cpp_pkg/CMakeLists.txt <<'EOF'
+cmake_minimum_required(VERSION 3.8)
+project(hello_cpp_pkg)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+# find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+
+add_executable(hello_node src/hello_node.cpp)
+ament_target_dependencies(hello_node rclcpp)
+
+install(TARGETS
+  hello_node
+  DESTINATION lib/${PROJECT_NAME})
+
+ament_package()
+EOF
+```
+
+---
+hideInToc: true
+---
+
+# Run a package specific executable
+
+```
+cd ~/ros2_ws
+colcon build --packages-select hello_cpp_pkg
+source ~/ros2_ws/install/setup.bash
+ros2 run hello_cpp_pkg hello_node
 ```
 
 ---
