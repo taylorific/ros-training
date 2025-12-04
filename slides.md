@@ -711,6 +711,16 @@ tmux new-session -d -s ros "ros2 run demo_nodes_cpp talker" \; \
 ```
 
 ---
+layout: section
+---
+
+# Get started writing ROS code
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
 hideInToc: true
 ---
 
@@ -772,6 +782,199 @@ You need a build tool that:
 - Lets you re-build incrementally without breaking other packages
 
 CMake alone doesn't do this, colcon does.
+
+---
+hideInToc: true
+---
+
+# Create a workspace
+
+```bash
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+colcon build
+$ ls install
+COLCON_IGNORE		  local_setup.bash  local_setup.zsh  setup.sh
+_local_setup_util_ps1.py  local_setup.ps1   setup.bash	     setup.zsh
+_local_setup_util_sh.py   local_setup.sh    setup.ps1
+```
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/ros2_ws/install/setup.bash
+```
+
+---
+hideInToc: true
+---
+
+# Create a Python package
+
+```bash
+cd ~/ros2_ws/src
+ros2 pkg create \
+  hello_python_pkg \
+  --build-type ament_python \
+  --license Apache-2.0 \
+  --dependencies rclpy
+cd ~/ros2_ws
+colcon build \
+  --packages-select \
+  hello_python_pkg
+
+ros2 pkg list | grep hello_python_pkg
+source ~/ros2_ws/install/setup.bash
+ros2 pkg list | grep hello_python_pkg
+```
+
+---
+hideInToc: true
+---
+
+# Python package structure
+
+- `package.xml` file containing meta information about the package
+- `resource/<package_name>` marker file for the package
+- `setup.cfg` is required when a package has executables, so `ros2 run` can find them
+- `setup.py` containing instructions for how to install the package
+- `<package_name>` - a directory with the same name as your package, used by ROS 2 tools to find your package, contains `__init__.py`
+
+```
+my_package/
+      package.xml
+      resource/my_package
+      setup.cfg
+      setup.py
+      my_package/
+```
+
+---
+hideInToc: true
+---
+
+# Python hello world node
+
+```python
+cat >~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_node.py <<EOF
+#!/usr/bin/env python3
+
+import rclpy
+from rclpy.node import Node
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = Node('hello_node')
+    node.get_logger().info('Hello, world!')
+    rclpy.spin(node)  # keep the node alive - hit ctrl+c to stop
+    node.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+EOF
+```
+```bash
+chmod +x ~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_node.py
+$ ls ~/ros2_ws/src/hello_python_pkg/hello_python_pkg
+__init__.py  hello_node.py
+```
+
+---
+hideInToc: true
+---
+
+# Entry point (setup.py)
+
+```bash
+cat >~/ros2_ws/src/hello_python_pkg/setup.py <<EOF
+from setuptools import find_packages, setup
+
+package_name = 'hello_python_pkg'
+
+setup(
+    name=package_name,
+    version='0.0.0',
+    packages=find_packages(exclude=['test']),
+    data_files=[
+        ('share/ament_index/resource_index/packages',
+            ['resource/' + package_name]),
+        ('share/' + package_name, ['package.xml']),
+    ],
+    install_requires=['setuptools'],
+    zip_safe=True,
+    maintainer='ros',
+    maintainer_email='ros@todo.todo',
+    description='TODO: Package description',
+    license='Apache-2.0',
+    extras_require={
+        'test': [
+            'pytest',
+        ],
+    },
+    entry_points={
+        'console_scripts': [
+            'hello_node = hello_python_pkg.hello_node:main',
+        ],
+    },
+)
+EOF
+```
+
+---
+hideInToc: true
+---
+
+# Run a package specific executable
+
+```
+cd ~/ros2_ws
+colcon build --packages-select hello_python_pkg
+source ~/ros2_ws/install/setup.bash
+ros2 run hello_python_pkg hello_node
+```
+
+---
+hideInToc: true
+---
+
+# Create a C++ package
+
+```bash
+cd ~/ros2_ws/src
+ros2 pkg create \
+  hello_cpp_pkg \
+  --build-type ament_cmake \
+  --license Apache-2.0 \
+  --dependencies rclcpp
+colcon build \
+  --packages-select \
+  hello_cpp_pkg
+
+ros2 pkg list | grep hello_cpp_pkg
+source ~/ros2_ws/install/setup.bash
+ros2 pkg list | grep hello_python_pkg
+```
+
+---
+hideInToc: true
+---
+
+# C++ package structure
+
+```
+- `CMakeLists.txt` file that describes how to build the code within the package
+- `include/<package_name>` directory containing the public headers for the package
+- `package.xml` file containing meta information about the package
+- `src` directory containing the source code for the package
+```
+
+```
+my_package/
+     CMakeLists.txt
+     include/my_package/
+     package.xml
+     src/
+```
 
 ---
 hideInToc: true
@@ -858,105 +1061,6 @@ src/
 ```
 
 Both are valid. Colcon works with either
-
----
-hideInToc: true
----
-
-# Create a workspace
-
-```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws/src
-colcon build
-$ ls install
-COLCON_IGNORE		  local_setup.bash  local_setup.zsh  setup.sh
-_local_setup_util_ps1.py  local_setup.ps1   setup.bash	     setup.zsh
-_local_setup_util_sh.py   local_setup.sh    setup.ps1
-```
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source ~/ros2_ws/install/setup.bash
-```
-
----
-hideInToc: true
----
-
-# Create a Python package
-
-```bash
-cd ~/ros2_ws/src
-ros2 pkg create \
-  example_python_pkg \
-  --build-type ament_python \
-  --license Apache-2.0 \
-  --dependencies rclpy
-colcon build \
-  --packages-select \
-  example_python_pkg
-```
-
----
-hideInToc: true
----
-
-# Python package structure
-
-- `package.xml` file containing meta information about the package
-- `resource/<package_name>` marker file for the package
-- `setup.cfg` is required when a package has executables, so `ros2 run` can find them
-- `setup.py` containing instructions for how to install the package
-- `<package_name>` - a directory with the same name as your package, used by ROS 2 tools to find your package, contains `__init__.py`
-
-```
-my_package/
-      package.xml
-      resource/my_package
-      setup.cfg
-      setup.py
-      my_package/
-```
-
----
-hideInToc: true
----
-
-# Create a C++ package
-
-```bash
-cd ~/ros2_ws/src
-ros2 pkg create \
-  example_cpp_pkg \
-  --build-type ament_cmake \
-  --license Apache-2.0 \
-  --dependencies rclcpp
-colcon build \
-  --packages-select \
-  example_cpp_pkg
-```
-
----
-hideInToc: true
----
-
-# C++ package structure
-
-```
-- `CMakeLists.txt` file that describes how to build the code within the package
-- `include/<package_name>` directory containing the public headers for the package
-- `package.xml` file containing meta information about the package
-- `src` directory containing the source code for the package
-```
-
-```
-my_package/
-     CMakeLists.txt
-     include/my_package/
-     package.xml
-     src/
-```
 
 ---
 hideInToc: true
