@@ -577,7 +577,7 @@ hideInToc: true
 
 ```bash
 apt-cache policy | grep universe
-````
+```
 
 ---
 hideInToc: true
@@ -946,7 +946,7 @@ hideInToc: true
 - Must start with a letter
 - No capital letters, dashes (-), or spaces
 - Should be short, descriptive, and unique within the workspace
-- Name must match folder name, package.xml, and any resource marker (resource/<name>)
+- Name must match folder name, package.xml, and any resource marker (resource/&lt;name&gt;)
 - Used as the canonical identifier for ros2 run, ros2 pkg, and dependency resolution
 
 ---
