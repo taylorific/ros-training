@@ -679,13 +679,42 @@ sudo su - ros
 ```
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-ros2
+$ source /opt/ros/jazzy/setup.bash
+$ which ros2
+/opt/ros/jazzy/bin/ros2
+
+$ ros2
 ```
 
 ```bash
 grep -qxF 'source /opt/ros/jazzy/setup.bash' ~/.bashrc || \
   echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
+```
+
+---
+hideInToc: true
+---
+
+# /opt/ros/jazzy/setup.bash explained
+
+`source /opt/ros/jazzy/setup.bash` activates a ROS 2 environment for the current shell session. It's the same idea as activating a Python virtual environment, but for ROS.
+
+The `setup.bash` script adds the ROS tools to your PATH:
+
+```
+$ echo $PATH
+/opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+```
+
+The script also defines environment variables like:
+
+```
+AMENT_PREFIX_PATH
+COLCON_CURRENT_PREFIX
+ROS_DISTRO
+ROS_VERSION
+LD_LIBRARY_PATH
+PYTHONPATH
 ```
 
 ---
@@ -724,9 +753,9 @@ layout: section
 hideInToc: true
 ---
 
-# Package
+# ROS Package
 
-A package is a small standalone project.
+A ROS package is a small standalone project.
 
 A ROS package is a source-level project directory with metadata, declared with `package.xml`.  It is a folder, not a binary. It is the __source unit of compilation__.
 
@@ -745,11 +774,11 @@ hideInToc: true
 A workspace is a __local build environment__. It is intended to be disposable. The workspace stores build artifacts and should never be committed to source control:
 
 ```
-ros_ws/
-  src/       # All packages (each has its own build system)
-  build/     # Per-package build directories. DO NOT commit (generated)
-  install/   # Final artifacts. DO NOT commit (generated)
-  log/       # Logs. DO NOT commit (generated)
+ros2_ws/
+├── src/       # All packages (each has its own build system)
+├── build/     # Per-package build directories. DO NOT commit (generated)
+├── install/   # Final artifacts. DO NOT commit (generated)
+└── log/       # Logs. DO NOT commit (generated)
 ```
 
 ---
@@ -793,15 +822,13 @@ hideInToc: true
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
 colcon build
-$ ls install
-COLCON_IGNORE		  local_setup.bash  local_setup.zsh  setup.sh
-_local_setup_util_ps1.py  local_setup.ps1   setup.bash	     setup.zsh
-_local_setup_util_sh.py   local_setup.sh    setup.ps1
-```
 
-```bash
-source /opt/ros/jazzy/setup.bash
-source ~/ros2_ws/install/setup.bash
+$ tree -d -L 1 ~/ros2_ws
+/home/ros/ros2_ws
+├── build
+├── install
+├── log
+└── src
 ```
 
 ---
@@ -822,8 +849,12 @@ colcon build \
   --packages-select \
   hello_python_pkg
 
+# with `source /opt/ros/jazzy/setup.bash`
+# AMENT_PREFIX_PATH=/opt/ros/jazzy
 ros2 pkg list | grep hello_python_pkg
+
 source ~/ros2_ws/install/setup.bash
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_python_pkg:/opt/ros/jazzy
 ros2 pkg list | grep hello_python_pkg
 ```
 
@@ -834,19 +865,102 @@ hideInToc: true
 # Python package structure
 
 - `package.xml` file containing meta information about the package
-- `resource/<package_name>` marker file for the package
+- `resource/<package_name>` required empty file that signals to ROS tooling that the package exists and should be indexed
 - `setup.cfg` is required when a package has executables, so `ros2 run` can find them
 - `setup.py` containing instructions for how to install the package
 - `<package_name>` - a directory with the same name as your package, used by ROS 2 tools to find your package, contains `__init__.py`
 
 ```
-my_package/
-      package.xml
-      resource/my_package
-      setup.cfg
-      setup.py
-      my_package/
+/home/ros/ros2_ws/src/hello_python_pkg
+├── LICENSE
+├── hello_python_pkg
+│   └── __init__.py
+├── package.xml
+├── resource
+│   └── hello_python_pkg
+├── setup.cfg
+├── setup.py
+└── test
+    ├── test_copyright.py
+    ├── test_flake8.py
+    └── test_pep257.py
 ```
+
+---
+hideInToc: true
+---
+
+# Create a C++ package
+
+```bash
+cd ~/ros2_ws/src
+ros2 pkg create \
+  hello_cpp_pkg \
+  --build-type ament_cmake \
+  --license Apache-2.0 \
+  --dependencies rclcpp
+cd ~/ros2_ws
+colcon build \
+  --packages-select \
+  hello_cpp_pkg
+
+# with `source /opt/ros/jazzy/setup.bash`
+# AMENT_PREFIX_PATH=/opt/ros/jazzy
+ros2 pkg list | grep hello_cpp_pkg
+
+source ~/ros2_ws/install/setup.bash
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/jazzy
+ros2 pkg list | grep hello_cpp_pkg
+```
+
+---
+hideInToc: true
+---
+
+# C++ package structure
+
+```
+- `CMakeLists.txt` file that describes how to build the code within the package
+- `include/<package_name>` directory containing the public headers for the package
+- `package.xml` file containing meta information about the package
+- `src` directory containing the source code for the package
+```
+
+```
+/home/ros/ros2_ws/src/hello_cpp_pkg
+├── CMakeLists.txt
+├── LICENSE
+├── include
+│   └── hello_cpp_pkg
+├── package.xml
+└── src
+```
+
+
+---
+hideInToc: true
+---
+
+# ROS Package naming
+
+- Lowercase alphanumeric characters plus underscores (a–z, 0–9, _)
+- Must start with a letter
+- No capital letters, dashes (-), or spaces
+- Should be short, descriptive, and unique within the workspace
+- Name must match folder name, package.xml, and any resource marker (resource/<name>)
+- Used as the canonical identifier for ros2 run, ros2 pkg, and dependency resolution
+
+---
+hideInToc: true
+---
+
+# Introducing ROS Nodes
+
+• A **workspace** is a local directory __where you build and organize your ROS code__.
+• A **package** is the unit of __organization and distribution__ inside a workspace.
+- A **node** is the __executable program__ inside a package that actually does work in a ROS system.
+- A node is where your code lives in ROS.
+- A node is something like a ROS micro-service.
 
 ---
 hideInToc: true
@@ -855,7 +969,7 @@ hideInToc: true
 # Python hello world node
 
 ```python
-cat >~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_node.py <<EOF
+cat >~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_python_node.py <<EOF
 #!/usr/bin/env python3
 
 import rclpy
@@ -865,7 +979,6 @@ def main(args=None):
     rclpy.init(args=args)
     node = Node('hello_node')
     node.get_logger().info('Hello, world!')
-    rclpy.spin(node)  # keep the node alive - hit ctrl+c to stop
     node.destroy_node()
     rclpy.shutdown()
 
@@ -874,7 +987,7 @@ if __name__ == '__main__':
 EOF
 ```
 ```bash
-chmod +x ~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_node.py
+chmod +x ~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_python_node.py
 $ ls ~/ros2_ws/src/hello_python_pkg/hello_python_pkg
 __init__.py  hello_node.py
 ```
@@ -913,7 +1026,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'hello_node = hello_python_pkg.hello_node:main',
+            'hello_python_node = hello_python_pkg.hello_python_node:main',
         ],
     },
 )
@@ -924,57 +1037,15 @@ EOF
 hideInToc: true
 ---
 
-# Run a package specific executable
+# Run a package specific Python executable
 
 ```
 cd ~/ros2_ws
 colcon build --packages-select hello_python_pkg
 source ~/ros2_ws/install/setup.bash
-ros2 run hello_python_pkg hello_node
-```
-
----
-hideInToc: true
----
-
-# Create a C++ package
-
-```bash
-cd ~/ros2_ws/src
-ros2 pkg create \
-  hello_cpp_pkg \
-  --build-type ament_cmake \
-  --license Apache-2.0 \
-  --dependencies rclcpp
-cd ~/ros2_ws
-colcon build \
-  --packages-select \
-  hello_cpp_pkg
-
-ros2 pkg list | grep hello_cpp_pkg
-source ~/ros2_ws/install/setup.bash
-ros2 pkg list | grep hello_cpp_pkg
-```
-
----
-hideInToc: true
----
-
-# C++ package structure
-
-```
-- `CMakeLists.txt` file that describes how to build the code within the package
-- `include/<package_name>` directory containing the public headers for the package
-- `package.xml` file containing meta information about the package
-- `src` directory containing the source code for the package
-```
-
-```
-my_package/
-     CMakeLists.txt
-     include/my_package/
-     package.xml
-     src/
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/jazzy
+$ ros2 run hello_python_pkg hello_python_node
+[INFO] [1764903922.188898944] [hello_node]: Hello, world!
 ```
 
 ---
@@ -984,19 +1055,16 @@ hideInToc: true
 # C++ hello world node
 
 ```bash
-cat >~/ros2_ws/src/hello_cpp_pkg/src/hello_node.cpp <<EOF
+cat >~/ros2_ws/src/hello_cpp_pkg/src/hello_cpp_node.cpp <<EOF
 #include <rclcpp/rclcpp.hpp>
 
 int main(int argc, char * argv[])
 {
     rclcpp::init(argc, argv);
 
-    auto node = std::make_shared<rclcpp::Node>("hello_node");
+    auto node = std::make_shared<rclcpp::Node>("hello_cpp_node");
 
     RCLCPP_INFO(node->get_logger(), "Hello, world! ");
-
-    // Keep spinning so the node stays alive (optional for one-time logging)
-    rclcpp::spin(node);
 
     rclcpp::shutdown();
     return 0;
@@ -1023,12 +1091,13 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 
-add_executable(hello_node src/hello_node.cpp)
-ament_target_dependencies(hello_node rclcpp)
+add_executable(hello_cpp_node src/hello_cpp_node.cpp)
+ament_target_dependencies(hello_cpp_node rclcpp)
 
 install(TARGETS
-  hello_node
-  DESTINATION lib/${PROJECT_NAME})
+  hello_cpp_node
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 ament_package()
 EOF
@@ -1044,7 +1113,9 @@ hideInToc: true
 cd ~/ros2_ws
 colcon build --packages-select hello_cpp_pkg
 source ~/ros2_ws/install/setup.bash
-ros2 run hello_cpp_pkg hello_node
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/jazzy
+$ ros2 run hello_cpp_pkg hello_cpp_node
+[INFO] [1764904714.200800158] [hello_cpp_node]: Hello, world!
 ```
 
 ---
