@@ -1267,3 +1267,16 @@ colcon build
 
 or a different configuration later.
 
+---
+hideInToc: true
+---
+
+# Delivering your ROS code to robots in production
+
+There are three primary approaches to packaging and delivery your robotics software.
+
+1. Traditional ROS 2
+2. Docker/Container-based
+3. Nix-based
+
+Each have their pros and cons. There is no one-best fit solution. You'll have to choose which works best for your particular situation.
