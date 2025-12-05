@@ -701,14 +701,14 @@ hideInToc: true
 
 The `setup.bash` script adds the ROS tools to your PATH:
 
-```
+```bash
 $ echo $PATH
 /opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 ```
 
 The script also defines environment variables like:
 
-```
+```bash
 AMENT_PREFIX_PATH
 COLCON_CURRENT_PREFIX
 ROS_DISTRO
@@ -936,7 +936,6 @@ hideInToc: true
 └── src
 ```
 
-
 ---
 hideInToc: true
 ---
@@ -956,8 +955,8 @@ hideInToc: true
 
 # Introducing ROS Nodes
 
-• A **workspace** is a local directory __where you build and organize your ROS code__.
-• A **package** is the unit of __organization and distribution__ inside a workspace.
+- A **workspace** is a local directory __where you build and organize your ROS code__.
+- A **package** is the unit of __organization and distribution__ inside a workspace.
 - A **node** is the __executable program__ inside a package that actually does work in a ROS system.
 - A node is where your code lives in ROS.
 - A node is something like a ROS micro-service.
@@ -986,6 +985,7 @@ if __name__ == '__main__':
     main()
 EOF
 ```
+
 ```bash
 chmod +x ~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_python_node.py
 $ ls ~/ros2_ws/src/hello_python_pkg/hello_python_pkg
@@ -1039,7 +1039,7 @@ hideInToc: true
 
 # Run a package specific Python executable
 
-```
+```bash
 cd ~/ros2_ws
 colcon build --packages-select hello_python_pkg
 source ~/ros2_ws/install/setup.bash
@@ -1251,10 +1251,10 @@ hideInToc: true
 # Why some ROS projects include multiple workspace YAML definitions
 
 Many large ROS projects support multiple build configurations:
-	•	minimal workspace (core libraries only)
-	•	desktop workspace (URDF, RViz, perception, etc.)
-	•	simulation workspace (Gazebo/Ignition/Isaac Sim plugins)
-	•	full-stack workspace (drivers + SLAM + navigation)
+	-	minimal workspace (core libraries only)
+	-	desktop workspace (URDF, RViz, perception, etc.)
+	-	simulation workspace (Gazebo/Ignition/Isaac Sim plugins)
+	-	full-stack workspace (drivers + SLAM + navigation)
 
 Each one is defined by a separate `.yaml` or `.repos` file.
 
