@@ -1284,64 +1284,59 @@ Access is controlled with **tokens**: short-lived JWTs that grant one identity a
 hideInToc: true
 ---
 
-# Why use LiveKit with ROS?
+# Why LiveKit?
 
-ROS 2 uses DDS, which was designed for a single local network:
+WebRTC is built into every browser, but a real-time video product needs much more than the WebRTC API:
 
-- Discovery uses multicast, which doesn't cross routers, NAT, or the internet
-- Exposing DDS on a public network is a security risk
-- DDS has no notion of adapting video quality to a slow link
+- **Signaling**: a server to set up connections between participants
+- **NAT traversal**: STUN/TURN servers so peers behind firewalls can connect
+- **Scaling**: peer-to-peer breaks down past a few participants; an SFU forwards each stream once per subscriber
+- **Quality**: simulcast and adaptive bitrate for slow or changing networks
+- **Auth, SDKs, recording, monitoring**
 
-LiveKit gives you a secure, low-latency path out of the robot's network:
+LiveKit packages all of this:
 
-- **Teleoperation**: stream cameras to an operator, send `cmd_vel` back
-- **Remote monitoring**: watch telemetry from anywhere, including a browser
-- **Robot-to-cloud**: run inference or recording on another machine
+- Open source (Apache 2.0): self-host the same server LiveKit Cloud runs
+- SDKs for web, iOS, Android, Flutter, Unity, Rust, C++, Python, Go, Node.js and more
+- One model (rooms, participants, tracks) for people, AI agents, phones and robots
 
 ---
 hideInToc: true
+zoom: 0.9
 ---
 
-# LiveKit Portal for ROS
+# The LiveKit ecosystem
 
-[`livekit/ros-portal`](https://github.com/livekit/ros-portal) is a ROS 2 node that connects a ROS graph to a LiveKit room.
-
-| ROS | LiveKit |
+| Component | What it does |
 |---|---|
-| Topics (any message type) | Data tracks |
-| `sensor_msgs/Image` topics | Video tracks |
-| Remote video tracks | `sensor_msgs/CompressedImage` (JPEG) |
-| Services | RPC calls to a named participant |
-| `ros2 topic list`, `ros2 service call`, ... | Remote CLI services under `/ros_portal/` |
+| **Server** | The SFU: routes audio, video and data between participants in rooms |
+| **Agents** | Python/Node.js AI participants: speech-to-text → LLM → text-to-speech |
+| **Egress** | Record to MP4/HLS, or livestream to YouTube/Twitch over RTMP |
+| **Ingress** | Bring RTMP, WHIP, SRT or files into a room (e.g. OBS Studio) |
+| **SIP** | Connects phone calls to rooms, inbound and outbound |
+| **Cloud** | Hosted, globally distributed LiveKit |
+| **CLI (`lk`)** | Create tokens, manage rooms, publish test media, scaffold agents |
 
-Supports Humble, Jazzy, Kilted, and Lyrical on amd64 and arm64.
-
-Early access: configuration may change between releases.
+Server, Egress, Ingress, SIP and Agents are all open source.
 
 ---
 hideInToc: true
 ---
 
-# How the pieces fit together
+# What people build with LiveKit
 
-Two ROS graphs on different `ROS_DOMAIN_ID`s share no DDS traffic. The LiveKit room is their only connection.
+- **Voice AI**: OpenAI built ChatGPT's Advanced Voice mode on LiveKit Cloud
+- **Video AI and security**: Verkada streams security cameras for 30,000+ organizations
+- **Robotics**: Skydio uses it for remote observation and teleoperation of drones
+- **Call centers**: AI agents answering phone calls over SIP, handing off to humans
+- **Telehealth**: video visits between patients and clinicians
+- **Real-time translation**: an agent listens to one language and speaks another
+- **Livestreaming and meetings**: conferencing apps, recorded with Egress, broadcast over RTMP
+- **Games**: voice chat and AI-driven non-player characters
 
-```
- Robot (ROS_DOMAIN_ID=42)              Operator (ROS_DOMAIN_ID=100)
-┌──────────────────────────┐          ┌──────────────────────────┐
-│ turtlesim_node           │          │ ros2 topic pub cmd_vel   │
-│ cam2image (/image)       │          │ ros2 topic echo pose     │
-│          │               │          │          │               │
-│   ros_portal_node        │          │   ros_portal_node        │
-│   identity: turtle_sim   │          │   identity: controller   │
-└──────────┬───────────────┘          └──────────┬───────────────┘
-           │        ┌────────────────────┐       │
-           └───────►│  livekit-server    │◄──────┘
-                    │  room: turtle_room │
-                    └────────────────────┘
-```
-
-In production the robot and operator are on different networks and the server is in the cloud.
+<!--
+Customer examples are from livekit.com and the Agents docs as of Nov 2026.
+-->
 
 ---
 hideInToc: true
@@ -1388,6 +1383,181 @@ INFO  livekit  starting LiveKit server {"portHttp": 7880, "rtc.portTCP": 7881, "
 ```
 
 Never use `--dev` on a server reachable from the internet.
+
+---
+hideInToc: true
+---
+
+# Try LiveKit without ROS
+
+With the dev server running, publish a looping demo video from the CLI:
+
+```bash
+export LIVEKIT_URL=ws://127.0.0.1:7880
+lk room join --identity bot_user --publish-demo --dev test_room
+```
+
+In another terminal, inspect the room and send a message to everyone in it:
+
+```bash
+$ lk room list --dev
+│ RoomID          │ Name      │ Participants │ Publishers │
+│ RM_GG4GzXGeWXuF │ test_room │ 1            │ 1          │
+
+$ lk room participants list --dev test_room
+bot_user (ACTIVE)	 tracks: 1
+
+$ lk room send-data --dev --room test_room "hello from lk"
+successfully sent data to room test_room
+```
+
+---
+hideInToc: true
+zoom: 0.68
+---
+
+# A Python participant
+
+Save as `~/livekit/viewer.py`:
+
+```python
+import asyncio, os
+from livekit import rtc        # pip install livekit
+
+async def count_frames(stream):
+    n = 0
+    async for event in stream:
+        n += 1
+        if n % 300 == 0:
+            print(f"{n} frames, {event.frame.width}x{event.frame.height}")
+
+async def main():
+    room = rtc.Room()
+
+    @room.on("track_subscribed")
+    def on_track(track, publication, participant):
+        if track.kind == rtc.TrackKind.KIND_VIDEO:
+            print(f"video '{publication.name}' from {participant.identity}")
+            asyncio.ensure_future(count_frames(rtc.VideoStream(track)))
+
+    @room.on("data_received")
+    def on_data(packet):
+        print(f"data: {packet.data.decode()}")
+
+    await room.connect(os.environ["LIVEKIT_URL"], os.environ["LIVEKIT_TOKEN"])
+    print(f"connected to '{room.name}' as {room.local_participant.identity}")
+    await asyncio.sleep(60)
+    await room.disconnect()
+
+asyncio.run(main())
+```
+
+---
+hideInToc: true
+---
+
+# Run the Python participant
+
+```bash
+sudo apt-get install python3-venv
+python3 -m venv ~/livekit/venv
+~/livekit/venv/bin/pip install livekit
+
+export LIVEKIT_URL=ws://127.0.0.1:7880
+export LIVEKIT_TOKEN=$(lk token create --join --room test_room \
+  --identity python_viewer --valid-for 1h --token-only --yes --dev)
+~/livekit/venv/bin/python ~/livekit/viewer.py
+```
+
+```
+connected to 'test_room' as python_viewer
+video 'demo' from bot_user
+300 frames, 1280x720
+600 frames, 1280x720
+data: hello from lk
+900 frames, 1280x720
+```
+
+Each frame is a decoded `rtc.VideoFrame`: the starting point for computer vision, recording, or an AI agent that watches a camera.
+
+---
+hideInToc: true
+---
+
+# Why use LiveKit with ROS?
+
+ROS 2 uses DDS, which was designed for a single local network:
+
+- Discovery uses multicast, which doesn't cross routers, NAT, or the internet
+- Exposing DDS on a public network is a security risk
+- DDS has no notion of adapting video quality to a slow link
+
+LiveKit gives you a secure, low-latency path out of the robot's network:
+
+- **Teleoperation**: stream cameras to an operator, send `cmd_vel` back
+- **Remote monitoring**: watch telemetry from anywhere, including a browser
+- **Robot-to-cloud**: run inference or recording on another machine
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Other ways to reach a robot
+
+| Approach | Good for | Limits |
+|---|---|---|
+| DDS over a VPN | Same ROS tools everywhere | Discovery traffic is chatty over a VPN; no adaptive video; every node is reachable |
+| rosbridge / foxglove_bridge | Visualization and debugging in a browser | Single WebSocket (TCP) connection that needs an open port or tunnel; images sent as messages, not video codecs |
+| Zenoh (`rmw_zenoh`) | Routing ROS traffic across networks | Data only: no WebRTC video stack or browser/mobile media clients |
+| LiveKit + ROS Portal | Teleoperation, live video, many remote viewers | Extra infrastructure (a LiveKit server or Cloud); early-access ROS integration |
+
+These combine well: for example Foxglove for engineers debugging, LiveKit for operators driving with live video.
+
+---
+hideInToc: true
+---
+
+# LiveKit Portal for ROS
+
+[`livekit/ros-portal`](https://github.com/livekit/ros-portal) is a ROS 2 node that connects a ROS graph to a LiveKit room.
+
+| ROS | LiveKit |
+|---|---|
+| Topics (any message type) | Data tracks |
+| `sensor_msgs/Image` topics | Video tracks |
+| Remote video tracks | `sensor_msgs/CompressedImage` (JPEG) |
+| Services | RPC calls to a named participant |
+| `ros2 topic list`, `ros2 service call`, ... | Remote CLI services under `/ros_portal/` |
+
+Supports Humble, Jazzy, Kilted, and Lyrical on amd64 and arm64.
+
+Early access: configuration may change between releases.
+
+---
+hideInToc: true
+---
+
+# How the pieces fit together
+
+Two ROS graphs on different `ROS_DOMAIN_ID`s share no DDS traffic. The LiveKit room is their only connection.
+
+```
+ Robot (ROS_DOMAIN_ID=42)              Operator (ROS_DOMAIN_ID=100)
+┌──────────────────────────┐          ┌──────────────────────────┐
+│ turtlesim_node           │          │ ros2 topic pub cmd_vel   │
+│ cam2image (/image)       │          │ ros2 topic echo pose     │
+│          │               │          │          │               │
+│   ros_portal_node        │          │   ros_portal_node        │
+│   identity: turtle_sim   │          │   identity: controller   │
+└──────────┬───────────────┘          └──────────┬───────────────┘
+           │        ┌────────────────────┐       │
+           └───────►│  livekit-server    │◄──────┘
+                    │  room: turtle_room │
+                    └────────────────────┘
+```
+
+In production the robot and operator are on different networks and the server is in the cloud.
 
 ---
 hideInToc: true
