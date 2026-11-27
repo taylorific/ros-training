@@ -1258,6 +1258,401 @@ Each have their pros and cons. There is no one-best fit solution. You'll have to
 layout: section
 ---
 
+# ROS 2 networking: DDS and middleware
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# What is DDS?
+
+DDS (Data Distribution Service) is an open standard for publish/subscribe messaging, used in robotics, defense, and industrial systems. ROS 2 is built on top of it.
+
+- **No master**: unlike ROS 1's `roscore`, every process finds its peers itself (**discovery**)
+- **Participants** join a **domain**, then advertise their publishers and subscribers
+- **RTPS** is the wire protocol, so different DDS vendors can talk to each other
+- **QoS** (quality of service) policies decide how data is delivered: reliable or best effort, kept for late joiners or not, how much history
+
+What a ROS 2 node looks like on the network:
+
+| ROS 2 | DDS |
+|---|---|
+| `ROS_DOMAIN_ID` | domain |
+| process with nodes | participant |
+| topic | topic (+ type) |
+| publisher / subscription | data writer / data reader |
+| QoS profile | QoS policies |
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# The middleware is swappable: RMW
+
+```
+your node (rclcpp / rclpy)
+        │
+       rcl
+        │
+       rmw  ◄── RMW_IMPLEMENTATION picks the implementation at runtime
+   ┌────┴─────────────┬─────────────────┬─────────────────┐
+ Fast DDS        Cyclone DDS          Zenoh         Connext DDS
+```
+
+Every one of these is **Tier 1** on Lyrical:
+
+| RMW | Product | License | Notes |
+|---|---|---|---|
+| `rmw_fastrtps_cpp` | eProsima Fast DDS | Apache 2 | **Default**, always installed |
+| `rmw_cyclonedds_cpp` | Eclipse Cyclone DDS | EPL 2.0 | `ros-lyrical-rmw-cyclonedds-cpp` |
+| `rmw_zenoh_cpp` | Eclipse Zenoh | EPL 2.0 | Not DDS; `ros-lyrical-rmw-zenoh-cpp` |
+| `rmw_connextdds` | RTI Connext DDS | Commercial / research | Connext installed separately; not on arm64 |
+
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp     # per shell, or in ~/.bashrc
+ros2 run demo_nodes_cpp talker
+```
+
+---
+hideInToc: true
+---
+
+# How DDS discovery works
+
+1. Each participant **multicasts** "I'm here" to `239.255.0.1` on the domain's discovery port
+2. Peers reply, then exchange their publishers and subscribers by **unicast**
+3. Matching publisher/subscriber pairs (same topic, type, compatible QoS) start sending data
+
+Ports are derived from the domain ID: `7400 + 250 × domain` for discovery multicast, then unicast ports just above it.
+
+```bash
+# what a Fast DDS talker opened, measured on the VM
+ROS_DOMAIN_ID=0    0.0.0.0:7400  0.0.0.0:7414  0.0.0.0:7415  ...
+ROS_DOMAIN_ID=42   0.0.0.0:17900 0.0.0.0:17910 0.0.0.0:17911 ...
+```
+
+Multicast is the weak spot: Wi-Fi access points, VPNs, cloud networks and Docker's bridge network often drop it.
+
+---
+hideInToc: true
+---
+
+# Check the network first
+
+```bash
+# machine A
+ros2 multicast receive
+# machine B
+ros2 multicast send
+```
+
+```
+Waiting for UDP multicast datagram...
+Received from 10.63.45.217:38395: 'Hello World!'
+```
+
+If this fails, DDS discovery with default settings will fail too. Then:
+
+```bash
+ros2 doctor --report | grep -A3 middleware   # which RMW is active
+ros2 topic list                              # do you see the other machine's topics?
+ros2 topic info --verbose /chatter           # publishers, subscribers and their QoS
+```
+
+`ros2 topic list` uses a background daemon that caches the graph: after changing networking variables, run `ros2 daemon stop`.
+
+---
+hideInToc: true
+---
+
+# `ROS_DOMAIN_ID`: separate robots on one network
+
+```bash
+export ROS_DOMAIN_ID=42
+```
+
+Nodes only see nodes with the same domain ID, so teams and robots sharing a network don't cross-talk.
+
+Tested between the VM (talker) and the host (listener):
+
+| VM | Host | Result |
+|---|---|---|
+| domain 42 | domain 0 | nothing received |
+| domain 42 | domain 42 | received |
+
+- Pick **0 to 101**: higher IDs can collide with Linux's ephemeral ports (32768 to 60999); the maximum is 232
+- It's isolation, not security: anyone on the network can join your domain
+
+---
+hideInToc: true
+zoom: 0.78
+---
+
+# Limit discovery: range and static peers
+
+```bash
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST   # SUBNET (default) | LOCALHOST | OFF | SYSTEM_DEFAULT
+export ROS_STATIC_PEERS="10.63.45.81;robot2.local"
+```
+
+- `SUBNET`: discover anything reachable by multicast
+- `LOCALHOST`: only this machine, plus any static peers
+- `OFF`: discover nothing, not even on the same machine. Static peers are ignored too
+
+Tested between the VM (publisher) and the host (subscriber):
+
+| VM | Host | Result |
+|---|---|---|
+| default | `LOCALHOST` | nothing received |
+| default | `LOCALHOST` + `ROS_STATIC_PEERS=10.63.45.81` | received |
+| `OFF` | `OFF` + static peer | nothing received |
+| `OFF` + static peer | `OFF` + static peer | nothing received |
+
+`LOCALHOST` + static peers is the way to connect to specific machines without multicast. These variables work for the DDS middlewares, not Zenoh.
+
+---
+hideInToc: true
+zoom: 0.85
+---
+
+# QoS must be compatible
+
+```bash
+ros2 topic pub -r 5 --qos-reliability best_effort /qos_demo std_msgs/msg/String "{data: hi}"
+ros2 topic echo --qos-reliability reliable /qos_demo std_msgs/msg/String
+```
+
+```
+[WARN] [_ros2cli_36300]: New publisher discovered on topic '/qos_demo', offering
+       incompatible QoS. No messages will be received from it. Last incompatible policy: RELIABILITY
+```
+
+| Policy | Options | Rule |
+|---|---|---|
+| Reliability | `RELIABLE`, `BEST_EFFORT` | A reliable reader needs a reliable writer |
+| Durability | `TRANSIENT_LOCAL`, `VOLATILE` | A transient-local reader needs a transient-local writer |
+| History / depth | `KEEP_LAST(n)`, `KEEP_ALL` | Size of the queue |
+
+- Sensors usually publish **best effort** (`SensorDataQoS`): subscribe with best effort too
+- Maps and `/tf_static` use **transient local**, so late joiners still get the last message
+- `ros2 topic info --verbose` shows each endpoint's QoS
+
+---
+hideInToc: true
+zoom: 0.62
+---
+
+# Fast DDS, Cyclone DDS or Zenoh?
+
+| | Fast DDS (default) | Cyclone DDS | Zenoh |
+|---|---|---|---|
+| Install | Always installed | One apt package | One apt package + run a router |
+| Discovery | Multicast; optional **discovery server** | Multicast; unicast **peers** in XML | **Router** (TCP 7447); no multicast needed |
+| Config | XML profiles, environment variables | One XML via `CYCLONEDDS_URI` | JSON5 config, `ZENOH_CONFIG_OVERRIDE` |
+| Same-host transport | Shared memory by default | UDP by default; shared memory needs extra setup | Configurable |
+| Talks to other DDS | Yes (RTPS) | Yes (RTPS) | No: Zenoh nodes only |
+| Across Wi-Fi, NAT, internet | Hard (multicast); use discovery server | Hard; needs peers on both sides | Easiest: routers connect over TCP |
+| Docker | Pitfall: shared memory across containers | Worked out of the box in our tests | Router per host |
+| Discovery range variables | Supported | Supported | Not supported |
+
+**Fast DDS**: nothing to install and the most features, but more surprises: the shared-memory trap in Docker and verbose XML.
+
+**Cyclone DDS**: small and predictable, one readable config file; the most common alternative to the default. You must list unicast peers on every machine.
+
+**Zenoh**: designed for networks DDS struggles with (Wi-Fi, fleets, cloud). Needs a router, and can't talk to DDS nodes.
+
+Pick one per system and use it everywhere.
+
+---
+hideInToc: true
+zoom: 0.82
+---
+
+# Mixing middlewares
+
+Tested with the VM talker and host listener, each line for 10 s at 1 message/s:
+
+| Talker (VM) | Listener (host) | Messages |
+|---|---|---|
+| Fast DDS | Fast DDS | 10 |
+| Cyclone DDS | Cyclone DDS | 10 |
+| Fast DDS | Cyclone DDS | 9 |
+| Zenoh | Zenoh, no router | 0 |
+| Zenoh | Fast DDS | 0 |
+| Zenoh (router per host) | Zenoh | 10 |
+
+- DDS vendors interoperate over RTPS, but QoS details and performance tuning differ: don't rely on mixing them
+- Zenoh is a different protocol, so it never talks to DDS nodes directly (a `zenoh-bridge-ros2dds` can translate)
+- Setting `RMW_IMPLEMENTATION` everywhere (launch files, systemd units, containers) avoids accidental mixes
+
+---
+hideInToc: true
+zoom: 0.85
+---
+
+# Fast DDS example: discovery server
+
+When multicast doesn't work (Wi-Fi, cloud, VPN), run one central server instead:
+
+```bash
+# on 10.63.45.217
+fastdds discovery --server-id 0
+```
+
+```
+#### Server started ####
+  Running on:  UDPv4:[0.0.0.0]:11811
+```
+
+```bash
+# on every machine that should join (VM talker, host listener, ...)
+export ROS_DISCOVERY_SERVER=10.63.45.217:11811
+ros2 run demo_nodes_cpp talker
+```
+
+- Our test: VM talker → host listener through the server: received
+- Nodes without `ROS_DISCOVERY_SERVER` don't see nodes that use it
+- `ros2` CLI tools: set the same variable; add `ROS_SUPER_CLIENT=true` if the graph looks incomplete. Use `--spin-time 5` with `--no-daemon`, discovery takes a moment
+- Discovery traffic goes to one server instead of every participant, which also scales better
+
+Same-host trick with containers: `export FASTDDS_BUILTIN_TRANSPORTS=UDPv4` disables shared memory (see Docker slide).
+
+---
+hideInToc: true
+zoom: 0.78
+---
+
+# Cyclone DDS example: unicast only
+
+```xml
+<!-- ~/cyclonedds.xml on the VM; on the host: name="br0", peer 10.63.45.81 -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="enp1s0" />
+      </Interfaces>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>20</MaxAutoParticipantIndex>
+      <Peers>
+        <Peer address="10.63.45.217" />
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>
+```
+
+```bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI=file://$HOME/cyclonedds.xml
+```
+
+- `NetworkInterface`: use this NIC only (stops DDS picking a Docker bridge or VPN interface)
+- `ParticipantIndex auto` gives predictable ports so peers can find each other without multicast
+- Tested: both machines configured → received. Only the VM configured → nothing received
+
+---
+hideInToc: true
+zoom: 0.85
+---
+
+# Zenoh example: a router per host
+
+```bash
+sudo apt-get install ros-lyrical-rmw-zenoh-cpp
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
+```
+
+```bash
+# host 10.63.45.217: router
+ros2 run rmw_zenoh_cpp rmw_zenohd
+
+# VM: router that connects to the host's router
+ZENOH_CONFIG_OVERRIDE='connect/endpoints=["tcp/10.63.45.217:7447"]' \
+  ros2 run rmw_zenoh_cpp rmw_zenohd
+```
+
+```bash
+# nodes on each machine connect to their local router (tcp/localhost:7447) by default
+ros2 run demo_nodes_cpp talker      # VM
+ros2 run demo_nodes_cpp listener    # host
+```
+
+- Without a router, nodes don't discover each other at all, even on one machine
+- Our test: router per host → 10 of 10 messages. Pointing the VM's **node** directly at the host's router connected over TCP but delivered nothing: let nodes use their local router
+- Only TCP 7447 between routers: easy to open in a firewall, tunnel, or route across sites
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# ROS 2 in Docker: networking
+
+| Setup | Result (Fast DDS default) |
+|---|---|
+| VM talker → container on the default **bridge** network | nothing received |
+| Two containers, `--network host` | **nothing received** |
+| Two containers, `--network host --ipc host` | received |
+| Two containers, `--network host`, `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` | received |
+| Two containers, `--network host`, Cyclone DDS | received |
+
+- **Bridge network**: multicast doesn't cross Docker's NAT, and containers advertise private 172.17.x addresses. Use `--network host` for anything that talks to other machines
+- **The shared-memory trap**: with host networking, Fast DDS sees "the same host" and switches to shared memory, but each container has its own `/dev/shm`. Discovery works, `ros2 topic list` looks fine, and no data arrives
+- Fixes: `--ipc host`, `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`, or Cyclone DDS
+- Containers on one user-defined network (like `simnet` earlier) can discover each other, because multicast works inside one bridge
+
+---
+hideInToc: true
+---
+
+# Large messages and Wi-Fi
+
+Images and point clouds are split into many IP fragments. Lose one fragment over Wi-Fi and the whole message waits in a kernel buffer that's 256 KB by default, which can stall a topic for up to 30 s.
+
+```bash
+# from the ROS 2 "DDS tuning" guide: starting points, tune for your system
+sudo sysctl net.ipv4.ipfrag_time=3                     # default 30 s
+sudo sysctl net.ipv4.ipfrag_high_thresh=134217728      # 128 MB
+sudo sysctl net.core.rmem_max=8388608 net.core.rmem_default=8388608   # bigger receive buffers
+```
+
+- Make them permanent in `/etc/sysctl.d/60-ros.conf`
+- Use **best effort** QoS for sensor streams
+- Send compressed images (`/image/compressed`) or lower rates across machines
+- Over the internet, stream video instead of raw messages (LiveKit, later)
+
+---
+hideInToc: true
+zoom: 0.82
+---
+
+# Networking checklist
+
+| Symptom | Check |
+|---|---|
+| Other machine's topics don't show up | Same `ROS_DOMAIN_ID`? Same `RMW_IMPLEMENTATION`? `ros2 multicast send/receive` works? Firewall? |
+| Topics show up but no data | QoS mismatch (`ros2 topic info --verbose`)? Containers sharing shared memory? |
+| Works on wired, fails on Wi-Fi | Multicast blocked: discovery server, static peers, or Zenoh. Fragment tuning for big messages |
+| `ros2 topic list` is stale | `ros2 daemon stop` |
+| Random cross-talk with other robots | Different domain IDs, or `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` |
+| Container can't see the robot | `--network host` (not the default bridge) |
+
+Set the networking variables in one place (a sourced env file, systemd `Environment=`, Docker `-e`) so every process on a robot agrees.
+
+---
+layout: section
+---
+
 # Simulation with Gazebo and Nav2
 
 <br>
