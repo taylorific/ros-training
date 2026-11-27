@@ -1258,6 +1258,751 @@ Each have their pros and cons. There is no one-best fit solution. You'll have to
 layout: section
 ---
 
+# Simulation with Gazebo and Nav2
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
+hideInToc: true
+---
+
+# Gazebo and ROS 2
+
+Gazebo is the open source robot simulator from the same community as ROS: physics, sensors, and 3D rendering.
+
+- Each ROS 2 release is paired with a Gazebo release: **Lyrical ↔ Gazebo Jetty (gz-sim 10)**
+- `ros_gz` packages bridge Gazebo topics to ROS 2 topics and spawn robots from URDF
+- Install Gazebo through ROS (`ros-lyrical-ros-gz`), not separately, so the versions match
+- Gazebo is split in two:
+  - **server** (`gz sim -s`): physics and sensor rendering, can run headless
+  - **GUI client** (`gz sim -g`): 3D view that attaches to a running server
+
+That split is what makes an on-demand GUI possible: the simulation runs headless all the time, and you attach a GUI only when someone wants to look.
+
+---
+hideInToc: true
+---
+
+# Nav2 in one slide
+
+Nav2 is the ROS 2 navigation stack: give it a map and a goal pose, and it drives the robot there.
+
+| Piece | Job |
+|---|---|
+| `map_server` + `amcl` | Load the map, localize the robot with the lidar |
+| global / local costmaps | Obstacles from the map and live sensors |
+| `planner_server` | Plan a path across the global costmap |
+| `controller_server` | Follow the path, publish `cmd_vel` |
+| `bt_navigator` | Behavior tree tying it together (`navigate_to_pose` action) |
+| `lifecycle_manager` | Starts the nodes in order and aborts if one fails |
+
+`nav2_bringup` ships complete simulations to learn on. We'll use the **TurtleBot 4** in the **Depot** world.
+
+---
+hideInToc: true
+---
+
+# Simulated sensors as ROS topics
+
+The TurtleBot 4 simulation publishes the sensors a real robot has:
+
+| Sensor | Topic | Type | Rate |
+|---|---|---|---|
+| Lidar | `/scan` | `sensor_msgs/LaserScan` | 10 Hz |
+| IMU | `/imu` | `sensor_msgs/Imu` | 200 Hz |
+| Wheel odometry | `/odom` (+ `odom → base_link` TF) | `nav_msgs/Odometry` | 83 Hz |
+| RGB camera | `/rgbd_camera/image` | `sensor_msgs/Image` | 10 Hz |
+| Depth camera | `/rgbd_camera/depth_image` | `sensor_msgs/Image` (32FC1) | 10 Hz |
+| Camera intrinsics | `/rgbd_camera/camera_info` | `sensor_msgs/CameraInfo` | 10 Hz |
+| Sim clock | `/clock` | `rosgraph_msgs/Clock` | |
+
+Nodes run with `use_sim_time:=true` so they follow the simulator's clock, not the wall clock.
+
+```bash
+ros2 topic hz /scan
+ros2 topic echo --once /rgbd_camera/depth_image --field encoding
+```
+
+---
+hideInToc: true
+---
+
+# Architecture: headless sim, GUI on demand
+
+```
+             always running                         only while someone is looking
+┌──────────────────────────────────────┐        ┌──────────────────────────────────┐
+│ gz sim -s   (physics, sensors)       │◄──────►│ gz sim -g     (Gazebo 3D view)   │
+│ ros_gz bridge                        │ gz +   │ rviz2         (map, costmaps)    │
+│ Nav2 (amcl, planner, controller, ..) │ ROS 2  │ Xvnc :1 + openbox                │
+└──────────────────────────────────────┘        │ websockify + noVNC  :6080        │
+                                                └───────────────┬──────────────────┘
+                                                                │ http + websocket
+                                         browser ──► http://<host>:6080/vnc.html
+```
+
+- **Xvnc** (TigerVNC): an X server with no monitor that draws into memory and serves VNC
+- **noVNC** + **websockify**: a VNC client in the browser, no install on the laptop
+- `Xvnc -MaxDisconnectionTime 600` exits after 10 minutes with no viewer
+- systemd starts the desktop on the **first browser connection**
+
+---
+hideInToc: true
+---
+
+# Install on the host (Ubuntu 26.04 + Lyrical)
+
+```bash
+sudo apt-get update
+sudo apt-get install \
+  ros-lyrical-navigation2 \
+  ros-lyrical-nav2-bringup \
+  ros-lyrical-nav2-minimal-tb4-sim \
+  ros-lyrical-ros-gz \
+  ros-lyrical-rviz2 \
+  tigervnc-standalone-server tigervnc-tools \
+  novnc websockify \
+  openbox xterm
+```
+
+- `nav2-minimal-tb4-sim` brings the TurtleBot 4 model and the Depot world
+- The Depot's 3D models download from Gazebo Fuel on first run (~100 MB, cached in `~/.gz/fuel`)
+- About 7 GB of packages. Plan on 8 GB RAM and 4 CPUs for the VM
+- Without a GPU, Gazebo renders the camera and GUI on the CPU (Mesa llvmpipe): ~1 CPU core for the sim
+
+---
+hideInToc: true
+---
+
+# Give Nav2 the robot's starting pose
+
+Nav2 waits for an initial pose. With no RViz click in the first minute, bringup **aborts**:
+
+```
+[ERROR] [global_costmap]: Failed to activate global_costmap because transform
+        from base_link to map did not become available before timeout
+```
+
+For a headless sim, put the pose in AMCL's parameters instead:
+
+```bash
+mkdir -p ~/sim
+cp /opt/ros/lyrical/share/nav2_bringup/params/nav2_params.yaml ~/sim/
+POSE="    set_initial_pose: true\n    initial_pose: {x: 7.1, y: 7.675, z: 0.0, yaw: 0.0}"
+sed -i "/^amcl:/,/ros__parameters:/ s/ros__parameters:/&\n$POSE/" ~/sim/nav2_params.yaml
+```
+
+The robot spawns at Gazebo world `(-8, 0)`, but the map's origin is its bottom-left corner, so in the **map** frame the robot is at `(7.1, 7.675)`.
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Run the simulation headless
+
+```bash
+source /opt/ros/lyrical/setup.bash
+ros2 launch nav2_bringup tb4_simulation_launch.py \
+  headless:=True use_rviz:=False \
+  params_file:=$HOME/sim/nav2_params.yaml
+```
+
+```
+[lifecycle_manager_nav2]: Managed nodes are active
+```
+
+In a VM, Gazebo can't use the virtual GPU (`eglInitialize failed for device EGL_EXT_device_drm`) and the sim never publishes odometry. Force Mesa's software renderer: `export LIBGL_ALWAYS_SOFTWARE=1` before launching.
+
+Send the robot somewhere (map coordinates):
+
+```bash
+ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
+  "{pose: {header: {frame_id: map}, pose: {position: {x: 11.0, y: 8.5}, orientation: {w: 1.0}}}}"
+```
+
+```
+Goal accepted with ID: 889cf0a0421c4f2e879e9ff6d2472529
+Result:
+    error_code: 0
+Goal finished with status: SUCCEEDED
+```
+
+---
+hideInToc: true
+zoom: 0.75
+---
+
+# `gui.sh`: the browser desktop
+
+The same script runs on the host and in the container:
+
+```bash
+#!/bin/bash
+# Browser desktop that attaches to a running simulation, and exits
+# by itself after IDLE_SECONDS with no VNC viewer connected.
+set -e
+source /opt/ros/lyrical/setup.bash
+# Take the GUI apps down with the desktop when Xvnc exits. Use SIGKILL:
+# the Gazebo GUI client ignores SIGTERM.
+trap 'set +e; for p in $(pgrep -g $$); do [ "$p" = "$$" ] || kill -KILL "$p" 2>/dev/null; done' EXIT
+
+mkdir -p ~/.vnc
+echo "${VNC_PASSWORD:-rosrocks}" | vncpasswd -f > ~/.vnc/passwd
+chmod 600 ~/.vnc/passwd
+
+Xvnc :1 -geometry 1600x900 -depth 24 -localhost \
+  -rfbauth ~/.vnc/passwd -MaxDisconnectionTime "${IDLE_SECONDS:-600}" &
+XVNC_PID=$!
+export DISPLAY=:1
+sleep 2
+
+openbox &
+websockify --web /usr/share/novnc "${WEB_PORT:-6080}" localhost:5901 &
+
+gz sim -g &
+rviz2 -d /opt/ros/lyrical/share/nav2_bringup/rviz/nav2_default_view.rviz &
+
+# Xvnc exits non-zero when the idle timeout fires: that is a normal stop
+wait "$XVNC_PID" || true
+```
+
+- `-localhost` keeps raw VNC (5901) private; only websockify (6080) is reachable, and it asks for the VNC password
+- The `trap` matters: the Gazebo GUI client ignores SIGTERM and would outlive the desktop
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# On the host: run the sim as a service
+
+```ini
+# /etc/systemd/system/sim.service
+[Unit]
+Description=Headless Gazebo + Nav2 TurtleBot 4 simulation
+After=network-online.target
+
+[Service]
+User=ubuntu
+Environment=GZ_PARTITION=sim LIBGL_ALWAYS_SOFTWARE=1
+ExecStart=/bin/bash -c "source /opt/ros/lyrical/setup.bash && \
+  exec ros2 launch nav2_bringup tb4_simulation_launch.py \
+    headless:=True use_rviz:=False \
+    params_file:=/home/ubuntu/sim/nav2_params.yaml"
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+install -m 755 gui.sh ~/sim/gui.sh
+sudo systemctl enable --now sim.service
+```
+
+Run the sim **one** way: a leftover `ros2 launch` from a terminal starts a second set of Nav2 nodes with the same names, and bringup fails. Check with `ros2 node list | sort | uniq -d`.
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# On the host: start the desktop on the first browser connection
+
+```ini
+# /etc/systemd/system/sim-gui.socket
+[Socket]
+ListenStream=6080
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
+# /etc/systemd/system/sim-gui.service: forwards each connection
+[Unit]
+BindsTo=sim-gui-desktop.service
+After=sim-gui-desktop.service
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=5min 127.0.0.1:16080
+```
+
+```ini
+# /etc/systemd/system/sim-gui-desktop.service: the desktop itself
+[Unit]
+StopWhenUnneeded=yes
+[Service]
+User=ubuntu
+Environment=GZ_PARTITION=sim LIBGL_ALWAYS_SOFTWARE=1 WEB_PORT=16080 IDLE_SECONDS=600
+ExecStart=/home/ubuntu/sim/gui.sh
+TimeoutStopSec=15
+ExecStartPost=/bin/sh -c "until curl -sf -o /dev/null http://127.0.0.1:16080/vnc.html; do sleep 1; done"
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now sim-gui.socket
+# browse to http://<vm-ip>:6080/vnc.html (password: rosrocks)
+```
+
+---
+hideInToc: true
+---
+
+# What you see in the browser
+
+<img src="/sim-desktop.png" class="h-88 mx-auto" />
+
+Gazebo GUI (left) and RViz with the Nav2 panel (right), attached to the headless sim in the course VM, mid-way to a goal.
+
+---
+hideInToc: true
+---
+
+# The same thing in Docker: the image
+
+```dockerfile
+FROM ros:lyrical-ros-base
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-lyrical-navigation2 ros-lyrical-nav2-bringup \
+      ros-lyrical-nav2-minimal-tb4-sim ros-lyrical-ros-gz ros-lyrical-rviz2 \
+      tigervnc-standalone-server tigervnc-tools novnc websockify \
+      openbox xterm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Register NVIDIA's EGL library so Gazebo renders sensors on the GPU
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d && \
+    printf '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}\n' \
+      > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+# Gazebo only talks to peers in the same partition (default: hostname:user)
+ENV GZ_PARTITION=sim
+
+COPY gui.sh /usr/local/bin/gui.sh
+```
+
+```bash
+docker build -t ros-sim:lyrical .
+```
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Run the simulation container
+
+```bash
+docker network create simnet
+docker volume create gz-fuel
+
+docker run -d --name sim --network simnet \
+  --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -v gz-fuel:/root/.gz/fuel \
+  -v $HOME/sim:/config:ro \
+  ros-sim:lyrical bash -c "source /opt/ros/lyrical/setup.bash && \
+    ros2 launch nav2_bringup tb4_simulation_launch.py \
+      headless:=True use_rviz:=False params_file:=/config/nav2_params.yaml"
+```
+
+- `--gpus all` + `NVIDIA_DRIVER_CAPABILITIES=all`: GPU for sensor rendering (needs the NVIDIA Container Toolkit). Drop both on a machine without an NVIDIA GPU
+- `gz-fuel` volume: models download once and are shared with the GUI container
+- `simnet`: ROS 2 and Gazebo discovery both use multicast, which works inside one Docker network
+
+```bash
+$ nvidia-smi | grep gz-sim
+|  0  N/A  N/A  1187865  G  .../libexec/gz/sim10/gz-sim-main  754MiB |
+```
+
+Without the EGL vendor file Gazebo silently falls back to the CPU: `gz-sim-main` used 164% CPU on Mesa vs 89% on the GPU.
+
+---
+hideInToc: true
+---
+
+# Attach a GUI container
+
+```bash
+docker run -d --rm --name sim-gui --network simnet \
+  -p 127.0.0.1:6080:6080 \
+  -v gz-fuel:/root/.gz/fuel \
+  -e VNC_PASSWORD=rosrocks -e IDLE_SECONDS=600 \
+  ros-sim:lyrical gui.sh
+```
+
+Open `http://localhost:6080/vnc.html` (through an SSH tunnel: `ssh -L 6080:localhost:6080 <host>`).
+
+- The GUI joins the running sim: stopping it doesn't disturb the simulation or Nav2
+- Same `GZ_PARTITION` (set in the image) so `gz sim -g` finds the server in the other container
+- Same `gz-fuel` volume, or the 3D view stays empty: the GUI loads meshes from its own cache
+
+---
+hideInToc: true
+zoom: 0.72
+---
+
+# In Docker: start the GUI container on the first connection
+
+Same pattern as on the host, but the desktop unit runs a container:
+
+```ini
+# /etc/systemd/system/sim-gui.socket
+[Socket]
+ListenStream=127.0.0.1:6080
+[Install]
+WantedBy=sockets.target
+```
+
+```ini
+# /etc/systemd/system/sim-gui.service: forwards the connection
+[Unit]
+BindsTo=sim-gui-container.service
+After=sim-gui-container.service
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=5min 127.0.0.1:16080
+```
+
+```ini
+# /etc/systemd/system/sim-gui-container.service: the desktop itself
+[Unit]
+StopWhenUnneeded=yes
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f sim-gui
+ExecStart=/usr/bin/docker run --rm --name sim-gui --network simnet \
+  -p 127.0.0.1:16080:6080 -v gz-fuel:/root/.gz/fuel ros-sim:lyrical gui.sh
+ExecStartPost=/bin/sh -c "until curl -sf -o /dev/null http://127.0.0.1:16080/vnc.html; do sleep 1; done"
+ExecStop=-/usr/bin/docker stop sim-gui
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now sim-gui.socket
+```
+
+---
+hideInToc: true
+---
+
+# What happens on demand
+
+```
+$ docker ps | grep sim-gui                      # nothing running
+$ curl -o /dev/null -w "%{http_code} %{time_total}s\n" http://127.0.0.1:6080/vnc.html
+200 3.414155s                                   # first visitor starts the desktop
+$ systemctl is-active sim-gui.socket sim-gui.service sim-gui-container.service
+active active active
+
+# ... no VNC viewer for IDLE_SECONDS: Xvnc exits, the container stops ...
+VNCServerST: MaxDisconnectionTime reached, exiting
+$ systemctl is-active sim-gui.socket sim-gui.service sim-gui-container.service
+active inactive inactive                        # only the socket is left listening
+
+$ curl -o /dev/null -w "%{http_code} %{time_total}s\n" http://127.0.0.1:6080/vnc.html
+200 3.492851s                                   # next visitor starts it again
+```
+
+- `BindsTo=` (not `Requires=`) so the proxy stops when the container exits on its own
+- The `-` in `ExecStop=-` ignores the error when the container already removed itself
+- Use system units: a `systemctl --user` manager started before you joined the `docker` group can't reach the Docker socket
+
+---
+hideInToc: true
+---
+
+# Foxglove
+
+A visualization and data platform for robotics. It runs **in your browser or a desktop app** and draws the robot's data locally, instead of streaming a remote desktop.
+
+- **Live**: connect to a running robot or sim through `foxglove_bridge` (WebSocket, port 8765)
+- **Recorded**: open MCAP files and ROS bags, scrub through time
+- **Panels**: 3D (TF, point clouds, markers, URDF), Image, Plot, Map, Raw Messages, Log, Diagnostics, Topic Graph, Parameters, Service Call, Publish, Teleop and more
+- **Layouts**: arrange panels once, share them with the team
+- **Cloud** (paid tiers): upload recordings from devices, search and stream them
+
+Apps: `app.foxglove.dev` in Chrome, or desktop for Linux (`.deb`), macOS and Windows. Foxglove's docs start with "Create a free Foxglove account".
+
+---
+hideInToc: true
+zoom: 0.78
+---
+
+# Connect Foxglove to the simulation
+
+```bash
+sudo apt-get install ros-lyrical-foxglove-bridge
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml use_sim_time:=true
+```
+
+```
+[foxglove_bridge]: Advertising new channel 112 for topic "/behavior_tree_log"
+```
+
+In Foxglove: **Open connection → Foxglove WebSocket → `ws://<host>:8765`**
+
+What the bridge served from the TurtleBot 4 sim (112 topics advertised):
+
+| Topic | Type | Rate | Size per message |
+|---|---|---|---|
+| `/scan` | `sensor_msgs/msg/LaserScan` | 10 /s | 2.9 KB |
+| `/rgbd_camera/image` | `sensor_msgs/msg/Image` | 10 /s | **230 KB** (raw 320×240 RGB) |
+| `/odom` | `nav_msgs/msg/Odometry` | 83 /s | 0.7 KB |
+| `/imu` | `sensor_msgs/msg/Imu` | 199 /s | 0.3 KB |
+
+One small raw camera is already ~18 Mbit/s. Subscribe to `/rgbd_camera/image/compressed` instead, or throttle, over slow links.
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# Secure the bridge
+
+`foxglove_bridge` has **no login**: anyone who can reach port 8765 can read every topic, publish, call services and set parameters.
+
+```bash
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml \
+  address:=127.0.0.1 \
+  topic_whitelist:="['/scan', '/odom', '/tf', '/tf_static', '/map', '/rgbd_camera/.*']" \
+  use_sim_time:=true
+```
+
+```bash
+# from your laptop
+ssh -L 8765:localhost:8765 <host>       # then connect to ws://localhost:8765
+```
+
+- `address:=127.0.0.1`: listen on localhost only (default `0.0.0.0`, every interface)
+- `topic_whitelist`, `service_whitelist`, `param_whitelist`, `client_topic_whitelist`: regex lists, default `.*`
+- `capabilities`: drop `clientPublish`, `services` or `parameters` for a read-only bridge
+- `tls:=true` with `certfile`/`keyfile` for `wss://`
+- `asset_uri_allowlist`: controls which files (meshes, URDF) clients can fetch
+
+---
+hideInToc: true
+---
+
+# Record and replay with MCAP
+
+MCAP is the default bag format on Lyrical, and Foxglove opens it directly:
+
+```bash
+$ ros2 bag record -o run1 --topics /scan /imu /odom /tf /tf_static
+$ ros2 bag info run1
+Files:             0_run1_2026_11_27-13_38_31.mcap
+Storage id:        mcap
+Duration:          9.505273561s
+Messages:          1997
+```
+
+- Drag the `.mcap` into Foxglove (or open it in the desktop app) to replay with every panel
+- Message definitions are stored inside the file, so it opens without the ROS packages installed
+- On Lyrical, pass topics with `--topics`; a bare `ros2 bag record /scan /imu` recorded nothing in our test
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Foxglove: pros and cons
+
+**Pros**
+
+- Nothing to install on the robot except `foxglove_bridge` (MIT licensed)
+- Renders on the viewer's machine: smooth 3D, no remote desktop, many viewers at once
+- Same layouts for live data and recordings; strong plotting and message inspection
+- Works with any ROS 2 distro the bridge supports, plus non-ROS data through the Foxglove SDK
+- Free tier, and free Academic plan for `.edu`/`.ac` addresses
+
+**Cons**
+
+- The app is proprietary and expects an account; cloud features are paid (Pro $20/month + usage, Enterprise custom)
+- Free tier limits: 3 users, 5 devices, 10 GB storage, 1 project
+- Sends raw ROS messages: images and point clouds use a lot of bandwidth over the internet
+- Bridge has no authentication: you must add network protection yourself
+- Not a simulator GUI: can't click to move objects in Gazebo, and RViz plugins don't carry over
+
+---
+hideInToc: true
+---
+
+# Open source alternative: Lichtblick
+
+Lichtblick is an open source (MPL-2.0) fork of Foxglove Studio, maintained since Foxglove's app became proprietary. Self-hosted, no Foxglove account.
+
+```bash
+docker run --rm -p 8080:8080 ghcr.io/lichtblick-suite/lichtblick:latest
+# open http://localhost:8080
+```
+
+- Runs in the browser or as a desktop app; opens MCAP files and ROS bags
+- Self-hosted: data never leaves your network
+- Fewer features than current Foxglove, and no cloud data platform
+- Connects live to `foxglove_bridge`: v2.5.2 includes the `foxglove.sdk.v1` protocol that current bridges require (older clients that only speak `foxglove.websocket.v1` get HTTP 400)
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Choosing a remote view
+
+| | noVNC desktop | Foxglove / Lichtblick | LiveKit |
+|---|---|---|---|
+| What travels | Pixels of a remote desktop | ROS messages | Encoded video + data |
+| Runs the GUI | On the server | In the viewer's browser | Your own app |
+| Gazebo GUI, RViz plugins | Yes | No | No |
+| Plots, message inspection, bag replay | Through RViz/rqt | Yes, best at it | No |
+| Many viewers | Each costs server CPU | Yes | Yes |
+| Bandwidth over the internet | Moderate (VNC compression) | High for images/clouds | Low (adaptive video) |
+| Access control | VNC password | None in the bridge | Tokens |
+
+A common setup: the noVNC desktop for the simulator GUI, Foxglove for engineers digging into data, and LiveKit for operators driving with live video.
+
+---
+hideInToc: true
+zoom: 0.7
+---
+
+# Lessons from getting this working
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Nav2 bringup aborts after ~1 minute | No initial pose, so no `map → odom` TF | `set_initial_pose` in AMCL params |
+| Goal fails with `error_code: 203` (start outside map) | Initial pose given in Gazebo world coordinates | Use **map** coordinates: `(7.1, 7.675)` in the Depot |
+| Gazebo GUI shows an empty, gray world | GUI container has no copy of the Fuel models | Share `~/.gz/fuel` (the `gz-fuel` volume) |
+| GUI client never sees the server | Different `GZ_PARTITION` (defaults to `hostname:user`) | Same `GZ_PARTITION` in every container |
+| Sensors render on the CPU in Docker | No `10_nvidia.json` EGL vendor file in the image | Add it (see Dockerfile) |
+| Socket-activated desktop never starts | User systemd can't use Docker | System units |
+| In a VM: no odometry, `eglInitialize failed` | Gazebo tries the virtio GPU it can't open | `LIBGL_ALWAYS_SOFTWARE=1` |
+| Bringup fails though nothing changed | A leftover launch runs duplicate Nav2 nodes | Run the sim one way (the service) |
+| Desktop unit "failed" after idle | Gazebo GUI ignores SIGTERM; Xvnc exits non-zero | `trap` kills the group; `wait ... \|\| true` |
+
+---
+hideInToc: true
+---
+
+# NVIDIA Isaac Sim
+
+A robot simulator built on NVIDIA Omniverse: RTX ray-traced rendering, PhysX physics, USD scenes.
+
+- **Version**: 6.2.0, Apache 2.0 source on GitHub (`isaac-sim/IsaacSim`); Omniverse license terms are accepted on first run (`ACCEPT_EULA=Y`)
+- **Minimum**: GeForce RTX 4080 with 16 GB VRAM, 32 GB RAM, 50 GB SSD, driver 595.58+, Ubuntu 24.04 (22.04 deprecated)
+- **ROS 2**: built-in bridge with bundled **Humble** and **Jazzy** libraries; Lyrical is not listed
+- **Sensors**: RTX camera (RGB, depth, segmentation, bounding boxes), RTX lidar and radar, IMU, contact sensors; odometry and TF publishers
+- **Nav2**: tutorials with Nova Carter and iw.hub (`carter_navigation`)
+- **Synthetic data**: Replicator for labeled training images
+- **Remote GUI**: WebRTC livestream (desktop client or a Chromium browser), one viewer per instance
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# Isaac Sim in Docker
+
+```bash
+docker pull nvcr.io/nvidia/isaac-sim:6.2.0        # 31.9 GB
+
+docker run --name isaac-sim --entrypoint bash -it --rm --gpus all \
+  --network=host -e ACCEPT_EULA=Y -e PRIVACY_CONSENT=N \
+  -v ~/docker/isaac-sim/cache/main:/isaac-sim/.cache:rw \
+  -v ~/docker/isaac-sim/cache/computecache:/isaac-sim/.nv/ComputeCache:rw \
+  -v ~/docker/isaac-sim/cache/kit:/isaac-sim/kit/cache:rw \
+  -v ~/docker/isaac-sim/logs:/isaac-sim/.nvidia-omniverse/logs:rw \
+  -v ~/docker/isaac-sim/config:/isaac-sim/.nvidia-omniverse/config:rw \
+  -v ~/docker/isaac-sim/data:/isaac-sim/.local/share/ov/data:rw \
+  -v ~/docker/isaac-sim/pkg:/isaac-sim/.local/share/ov/pkg:rw \
+  -u 1234:1234 nvcr.io/nvidia/isaac-sim:6.2.0
+
+./isaac-sim.compatibility_check.sh --/app/quitAfter=10 --no-window
+./runheadless.sh -v     # livestream: TCP 49100 signaling, UDP 47998 media
+```
+
+- Create the `~/docker/isaac-sim/...` directories first and `chown -R 1234:1234` them; the caches make later starts much faster
+- `--network=host` is required for livestreaming and lets ROS 2 discovery reach the host
+- Livestream has no authentication or encryption: keep it on a trusted network or behind a VPN/tunnel
+
+---
+hideInToc: true
+zoom: 0.72
+---
+
+# Isaac Sim on an RTX 3060 Ti (8 GB)
+
+Below the official minimum, so we tried it:
+
+```
+|-- Driver version [supported]
+|-- GPU 0 [supported]
+|     |-- name: NVIDIA GeForce RTX 3060 Ti
+|-- GPU 0: VRAM [not enough]
+System checking result: FAILED
+```
+
+It still runs smaller scenes:
+
+| Test | Result |
+|---|---|
+| `./runheadless.sh -v` | "Isaac Sim Full Streaming App is loaded" after ~4 min (first start compiles shaders); 1.2 GB VRAM |
+| RTX lidar example in the warehouse, bundled Jazzy ROS 2 | `/scan` 8.3 Hz, `/point_cloud` 8.5 Hz (462,024 points), 2.95 GB VRAM |
+| Reading those topics from a **Lyrical** container | Works: Jazzy (Isaac) ↔ Lyrical over DDS for standard messages |
+
+```bash
+export ROS_DISTRO=jazzy RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+export LD_LIBRARY_PATH=/isaac-sim/exts/isaacsim.ros2.core/jazzy/lib
+./python.sh standalone_examples/api/isaacsim.ros2.bridge/rtx_lidar.py
+```
+
+---
+hideInToc: true
+zoom: 0.7
+---
+
+# Gazebo vs Isaac Sim
+
+| | Gazebo (Jetty) | Isaac Sim 6.2 |
+|---|---|---|
+| License | Apache 2.0 | Apache 2.0 source + Omniverse terms |
+| Hardware | Any x86/ARM; runs on CPU, GPU optional | NVIDIA RTX only, 16 GB VRAM minimum |
+| Install | apt packages; our Nav2 + Gazebo + VNC image is 7.7 GB | 31.9 GB container, x86_64 Linux (+ DGX Spark) |
+| ROS 2 | Native, versioned with each ROS release (Lyrical) | Bridge with bundled Humble/Jazzy |
+| Startup (our tests) | ~1 min to Nav2 active | ~4 min to app ready, ~6 min to a running scene, first start |
+| Rendering | OGRE 2, good enough for most perception | RTX ray tracing, photoreal |
+| Sensors | Camera, depth, lidar, IMU, odometry, contact | RTX camera, lidar and radar, segmentation, IMU, contact |
+| Physics | DART, Bullet | PhysX (GPU), Newton |
+| Scenes | SDF worlds, Fuel models | USD, NVIDIA asset library |
+| Remote GUI | Any VNC/noVNC desktop, many viewers | WebRTC livestream, one viewer |
+| Scale-out | Many headless sims per machine, CI-friendly | Few instances per GPU |
+| Synthetic data | Basic | Replicator: labeled data at scale |
+
+---
+hideInToc: true
+---
+
+# Which simulator when?
+
+**Gazebo** when you need:
+
+- Navigation, control and integration testing with Nav2/MoveIt
+- Many simulations at once: CI pipelines, every developer, classroom VMs
+- Machines without NVIDIA GPUs (laptops, VMs, ARM)
+- The newest ROS 2 release on day one
+
+**Isaac Sim** when you need:
+
+- Photoreal cameras or physically based lidar/radar for perception
+- Synthetic, labeled training data for machine learning
+- GPU physics at scale (manipulation, reinforcement learning with Isaac Lab)
+- NVIDIA's Isaac ROS / Jetson ecosystem
+
+Many teams use both: Gazebo for everyday development and CI, Isaac Sim for perception and data generation.
+
+---
+layout: section
+---
+
 # Remote access to ROS with LiveKit
 
 <br>
