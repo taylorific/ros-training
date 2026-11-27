@@ -2241,6 +2241,9 @@ ExecStart=/bin/bash -c "source /opt/ros/lyrical/setup.bash && \
     headless:=True use_rviz:=False \
     params_file:=/home/ubuntu/sim/nav2_params.yaml"
 Restart=on-failure
+# ros2 launch shuts down cleanly on Ctrl+C (SIGINT); SIGTERM timed out after 90 s
+KillSignal=SIGINT
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -2746,6 +2749,331 @@ hideInToc: true
 - NVIDIA's Isaac ROS / Jetson ecosystem
 
 Many teams use both: Gazebo for everyday development and CI, Isaac Sim for perception and data generation.
+
+---
+layout: section
+---
+
+# Recording and replay with ros2 bag
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
+hideInToc: true
+zoom: 0.75
+---
+
+# What a bag is for
+
+A **bag** records messages from topics (and optionally services and actions) to disk, with timestamps, so you can play them back later exactly as they happened.
+
+- **Debug** a failure that happened on the robot, at your desk
+- **Develop offline**: run perception or SLAM on recorded sensor data, without the robot
+- **Regression tests**: replay the same input after every change
+- **Share data** with teammates, and collect training data
+
+```
+depot_run/
+├── metadata.yaml                          # topics, types, QoS, counts, duration
+└── 0_depot_run_2026_11_27-16_51_26.mcap   # the messages (MCAP format)
+```
+
+| Command | Does |
+|---|---|
+| `ros2 bag record` | Record topics to a new bag |
+| `ros2 bag info` | Summary: duration, size, topics, counts |
+| `ros2 bag play` | Publish the recorded messages again |
+| `ros2 bag convert` | Filter topics, change storage or compression |
+| `ros2 bag reindex` | Rebuild a lost `metadata.yaml` |
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# Record
+
+While the TurtleBot 4 sim drove to a goal:
+
+```bash
+ros2 bag record -o depot_run --topics \
+  /scan /odom /imu /tf /tf_static /rgbd_camera/image /rgbd_camera/camera_info /cmd_vel
+# Ctrl+C to stop
+```
+
+```
+$ ros2 bag info depot_run
+Files:             0_depot_run_2026_11_27-16_51_26.mcap
+Bag size:          295.4 MiB
+Storage id:        mcap
+ROS Distro:        lyrical
+Duration:          125.111711767s
+Messages:          52391
+Topic information: Topic: /cmd_vel | Type: geometry_msgs/msg/TwistStamped | Count: 351
+                   Topic: /imu | Type: sensor_msgs/msg/Imu | Count: 24748
+                   Topic: /odom | Type: nav_msgs/msg/Odometry | Count: 10312
+                   Topic: /rgbd_camera/camera_info | Type: sensor_msgs/msg/CameraInfo | Count: 1237
+                   Topic: /rgbd_camera/image | Type: sensor_msgs/msg/Image | Count: 1238
+                   Topic: /scan | Type: sensor_msgs/msg/LaserScan | Count: 1237
+                   Topic: /tf | Type: tf2_msgs/msg/TFMessage | Count: 13267
+                   Topic: /tf_static | Type: tf2_msgs/msg/TFMessage | Count: 1
+```
+
+2.4 MB/s, almost all of it the raw camera: 1,238 images × 230 KB. On Lyrical, MCAP is the default storage.
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Choosing what to record
+
+```bash
+ros2 bag record --topics /scan /odom /tf /tf_static   # a list
+ros2 bag record -a                                      # every topic
+ros2 bag record -e "/rgbd_camera/.*|/scan"              # regex
+ros2 bag record -a --exclude-topics /rgbd_camera/image  # everything but
+ros2 bag record -a --exclude-regex ".*/compressed.*"
+ros2 bag record --topics /scan --services /spawn        # also service calls
+ros2 bag record --all-topics --all-services --all-actions
+```
+
+- Always record **`/tf` and `/tf_static`**, or nothing can be put in a common frame later
+- Record **`camera_info`** with images, and **`/clock`** in simulation
+- `-a` in a big system records hundreds of topics, including high-rate debug ones. Start from an explicit list
+- `/tf_static` is published once: the recorder catches it because it's transient-local, so a late recorder still gets it
+- Hidden topics (`/_...`) are skipped unless `--include-hidden-topics`
+
+---
+hideInToc: true
+zoom: 0.78
+---
+
+# Size and compression
+
+20 s of `/scan /odom /imu /tf /tf_static /rgbd_camera/image`:
+
+| Recording | Size |
+|---|---|
+| `ros2 bag record ...` (MCAP, default) | 46 MB |
+| `-s sqlite3` | 46 MB |
+| `--storage-preset-profile zstd_fast` | 11 MB |
+| `--storage-preset-profile zstd_small` | 1.8 MB |
+| `--compression-mode file --compression-format zstd` | 0.5 MB (`.mcap.zstd`) |
+| Same topics without the camera | 3.4 MB |
+
+- The robot was standing still, so the simulated camera frames were nearly identical: **real camera footage compresses far less**
+- `zstd_fast` is a good default: MCAP compresses each chunk, the bag stays readable and seekable
+- File compression gives the smallest files, but each file must be decompressed before reading
+- Biggest win: record `.../image/compressed`, or lower the camera rate, instead of raw images
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# Long recordings: split files and snapshots
+
+```bash
+# a new file every 10 s (or -b <bytes> for size)
+$ ros2 bag record -o split_run -d 10 --topics /scan /odom /tf
+$ ls split_run
+0_split_run_...16_56_04.mcap  1_split_run_...16_56_14.mcap  2_split_run_...16_56_24.mcap  metadata.yaml
+```
+
+**Snapshot mode** keeps only the last N seconds in memory and writes them when asked, like a dashcam:
+
+```bash
+ros2 bag record -o snap_run --snapshot-mode --max-cache-duration 5 --topics /scan /odom
+# ... later, when something interesting happens:
+ros2 service call /rosbag2_recorder/snapshot rosbag2_interfaces/srv/Snapshot
+```
+
+```
+rosbag2_interfaces.srv.Snapshot_Response(success=True)
+Topic: /odom | Count: 408         # ~5 s at 83 Hz
+Topic: /scan | Count: 49          # ~5 s at 10 Hz
+```
+
+The recorder also offers `/rosbag2_recorder/pause`, `resume`, `split_bagfile` and `stop` services: trigger them from your own nodes.
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# Play back
+
+```bash
+ros2 bag play depot_run                          # real time
+ros2 bag play depot_run -r 2                     # 2x speed
+ros2 bag play depot_run --clock                  # also publish /clock from the bag
+ros2 bag play depot_run -l                       # loop
+ros2 bag play depot_run --start-offset 120       # skip the first 120 s
+ros2 bag play depot_run -p                       # start paused
+ros2 bag play depot_run --topics /scan --remap /scan:=/scan_replay
+```
+
+Measured on the course VM (live sim stopped first):
+
+| Command | Result |
+|---|---|
+| `play depot_run` | `/scan` at 10.4 Hz |
+| `play depot_run -r 2 --clock` | `/scan` at 19.8 Hz, `/clock` at 40 Hz |
+| `--topics /scan --remap /scan:=/scan_replay` | only `/scan_replay` appears |
+| `--start-offset 120` (125 s bag) | finished in 5 s |
+
+**Stop the live system first** (or remap): replayed and live `/tf`, `/scan` and `/odom` would mix.
+
+---
+hideInToc: true
+zoom: 0.78
+---
+
+# Replay with simulated time
+
+Nodes that process a bag must follow the **bag's** clock, not the wall clock:
+
+```bash
+ros2 bag play depot_run --clock
+ros2 run my_pkg my_node --ros-args -p use_sim_time:=true
+```
+
+- Without `use_sim_time`, nodes compare old message stamps with the current wall clock: TF lookups and timeouts misbehave
+- With `-r 2` and `--clock`, every node using sim time runs at 2x too
+- Recorded QoS is replayed: the bag's metadata stores each publisher's QoS, and `/tf_static` is offered as `TRANSIENT_LOCAL` again, so a late subscriber still gets it:
+
+```
+$ ros2 topic info -v /tf_static
+Node name: rosbag2_player
+  Reliability: RELIABLE
+  Durability: TRANSIENT_LOCAL
+$ ros2 topic echo --once /tf_static | grep child_frame_id
+  child_frame_id: base_footprint
+  child_frame_id: bump_front_center
+```
+
+- If a subscriber needs different QoS, pass `--qos-profile-overrides-path overrides.yaml`
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Convert, filter, repair
+
+```yaml
+# convert.yaml: keep two topics, write SQLite
+output_bags:
+  - uri: scan_odom_sqlite
+    storage_id: sqlite3
+    topics: [/scan, /odom]
+```
+
+```bash
+$ ros2 bag convert -i depot_run -o convert.yaml
+$ ros2 bag info scan_odom_sqlite
+Files:             0_scan_odom_sqlite_2026_11_27-17_00_06.db3
+Bag size:          14.3 MiB
+Storage id:        sqlite3
+Messages:          11549
+```
+
+Lost `metadata.yaml` (e.g. the robot lost power mid-recording)?
+
+```bash
+$ ros2 bag info reidx
+Could not find metadata in bag directory reidx
+$ ros2 bag reindex reidx
+[INFO] [rosbag2_cpp]: Reindexing complete.
+```
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# Read a bag from Python
+
+```python
+import rosbag2_py
+from rclpy.serialization import deserialize_message
+from rosidl_runtime_py.utilities import get_message
+
+reader = rosbag2_py.SequentialReader()
+reader.open(rosbag2_py.StorageOptions(uri="depot_run"), rosbag2_py.ConverterOptions("", ""))
+reader.set_filter(rosbag2_py.StorageFilter(topics=["/odom", "/scan"]))
+types = {t.name: get_message(t.type) for t in reader.get_all_topics_and_types()}
+
+while reader.has_next():
+    topic, data, recv_ns, send_ns = reader.read_next_ext()
+    msg = deserialize_message(data, types[topic])
+    ...  # sum odometry distance, find the closest scan range
+```
+
+```
+$ time python3 read_bag.py depot_run
+drove 6.80 m, 1237 scans, closest obstacle 1.61 m
+real    0m1.167s
+```
+
+- No ROS graph needed: good for analysis, CI checks and dataset export
+- Full script: `examples/read_bag.py`. `read_next()` still works but is deprecated on Lyrical
+- To look instead of compute, open the `.mcap` in Foxglove (simulation section)
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Record from a launch file
+
+```python
+# examples/record_launch.py
+from launch import LaunchDescription
+from launch.actions import ExecuteProcess
+from launch_ros.actions import Node
+
+def generate_launch_description():
+    return LaunchDescription([
+        Node(package='demo_nodes_cpp', executable='talker'),
+        ExecuteProcess(
+            cmd=['ros2', 'bag', 'record', '-o', 'talker_run',
+                 '--storage-preset-profile', 'zstd_fast', '--topics', '/chatter'],
+            output='screen',
+        ),
+    ])
+```
+
+```
+[ros2-2] [rosbag2_recorder]: Recording stopped
+[ERROR] [ros2-2]: process has died [pid 12988, exit code 2, cmd 'ros2 bag record ...']
+```
+
+The `ERROR` on Ctrl+C is cosmetic: the CLI exits with code 2 after stopping cleanly, and the bag is complete.
+
+Stopping a recorder from a script: send **SIGINT** or **SIGTERM** to it in the foreground (`timeout -s INT 30 ros2 bag record ...`). A background job (`&`) in a script ignores SIGINT, so use SIGTERM there.
+
+---
+hideInToc: true
+zoom: 0.76
+---
+
+# Bag checklist
+
+| Do | Why |
+|---|---|
+| Record `/tf`, `/tf_static`, `camera_info` (and `/clock` in sim) | Nothing lines up without them |
+| Name bags (`-o`) with robot, date and what happened | Hundreds of `rosbag2_2026_...` directories are useless |
+| Use `--storage-preset-profile zstd_fast` | Smaller files, still seekable |
+| Record compressed images, or fewer camera topics | Raw cameras dominate size and disk bandwidth |
+| Split long runs (`-d` / `-b`) or use snapshot mode | One huge file is fragile and slow to copy |
+| Check free disk space before long recordings | Raw sensors fill disks fast: 2.4 MB/s here is 8.6 GB/hour |
+| Stop live nodes or remap before playing back | Replayed and live topics would mix |
+| Replay with `--clock` and `use_sim_time:=true` | Old timestamps break TF and timeouts otherwise |
+| Keep the message packages that were recorded | Custom types need their definitions to be read (MCAP stores them for tools like Foxglove) |
 
 ---
 layout: section
