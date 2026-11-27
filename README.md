@@ -13,6 +13,16 @@ docker run -it --rm \
 
 Edit the [slides.md](./slides.md) to see the changes.
 
+# Table of contents check
+
+Only section slides (`layout: section`) appear in the table of contents; every
+other slide needs `hideInToc: true`, and each section slide links back to the
+TOC with `<Link to="toc" .../>`. Check this before pushing (CI runs it too):
+
+```bash
+python3 scripts/check_toc.py
+```
+
 Learn more about Slidev at the [documentation](https://sli.dev/).
 
 # Update dependencies
