@@ -1253,3 +1253,415 @@ There are three primary approaches to packaging and delivery your robotics softw
 3. Nix-based
 
 Each have their pros and cons. There is no one-best fit solution. You'll have to choose which works best for your particular situation.
+
+---
+layout: section
+---
+
+# Remote access to ROS with LiveKit
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
+hideInToc: true
+---
+
+# What is LiveKit?
+
+LiveKit is an open source (Apache 2.0) real-time media server built on WebRTC. You can self-host it or use the hosted LiveKit Cloud.
+
+- A **room** is a session that **participants** join
+- Participants publish and subscribe to **tracks**: video, audio, and data
+- The server is an SFU (Selective Forwarding Unit): it routes tracks between participants without decoding them
+- WebRTC handles NAT traversal, encryption, congestion control and adaptive bitrate
+- SDKs exist for browsers, mobile, Python, Rust, Go, and C++
+
+Access is controlled with **tokens**: short-lived JWTs that grant one identity access to one room.
+
+---
+hideInToc: true
+---
+
+# Why use LiveKit with ROS?
+
+ROS 2 uses DDS, which was designed for a single local network:
+
+- Discovery uses multicast, which doesn't cross routers, NAT, or the internet
+- Exposing DDS on a public network is a security risk
+- DDS has no notion of adapting video quality to a slow link
+
+LiveKit gives you a secure, low-latency path out of the robot's network:
+
+- **Teleoperation**: stream cameras to an operator, send `cmd_vel` back
+- **Remote monitoring**: watch telemetry from anywhere, including a browser
+- **Robot-to-cloud**: run inference or recording on another machine
+
+---
+hideInToc: true
+---
+
+# LiveKit Portal for ROS
+
+[`livekit/ros-portal`](https://github.com/livekit/ros-portal) is a ROS 2 node that connects a ROS graph to a LiveKit room.
+
+| ROS | LiveKit |
+|---|---|
+| Topics (any message type) | Data tracks |
+| `sensor_msgs/Image` topics | Video tracks |
+| Remote video tracks | `sensor_msgs/CompressedImage` (JPEG) |
+| Services | RPC calls to a named participant |
+| `ros2 topic list`, `ros2 service call`, ... | Remote CLI services under `/ros_portal/` |
+
+Supports Humble, Jazzy, Kilted, and Lyrical on amd64 and arm64.
+
+Early access: configuration may change between releases.
+
+---
+hideInToc: true
+---
+
+# How the pieces fit together
+
+Two ROS graphs on different `ROS_DOMAIN_ID`s share no DDS traffic. The LiveKit room is their only connection.
+
+```
+ Robot (ROS_DOMAIN_ID=42)              Operator (ROS_DOMAIN_ID=100)
+┌──────────────────────────┐          ┌──────────────────────────┐
+│ turtlesim_node           │          │ ros2 topic pub cmd_vel   │
+│ cam2image (/image)       │          │ ros2 topic echo pose     │
+│          │               │          │          │               │
+│   ros_portal_node        │          │   ros_portal_node        │
+│   identity: turtle_sim   │          │   identity: controller   │
+└──────────┬───────────────┘          └──────────┬───────────────┘
+           │        ┌────────────────────┐       │
+           └───────►│  livekit-server    │◄──────┘
+                    │  room: turtle_room │
+                    └────────────────────┘
+```
+
+In production the robot and operator are on different networks and the server is in the cloud.
+
+---
+hideInToc: true
+---
+
+# Install the LiveKit server and CLI
+
+```bash
+# LiveKit server, installed to /usr/local/bin/livekit-server
+curl -sSL https://get.livekit.io | bash
+
+# LiveKit CLI, installed to /usr/local/bin/lk
+curl -sSL https://get.livekit.io/cli | bash
+```
+
+```bash
+$ livekit-server --version
+livekit-server version 1.13.11
+$ lk --version
+lk version 2.20.1
+```
+
+Skip the server if you use LiveKit Cloud. You still need `lk` to create tokens.
+
+---
+hideInToc: true
+---
+
+# Run a development server
+
+```bash
+livekit-server --dev --enable_participant_data_blob
+```
+
+- `--dev` uses the fixed credentials `devkey` / `secret`
+- `--enable_participant_data_blob` is required by ROS Portal to share message schemas
+- Listens on `ws://127.0.0.1:7880`. Media uses 7881/TCP and 7882/UDP
+- Add `--bind 0.0.0.0` to reach it from other machines
+
+```
+INFO  livekit  starting in development mode
+INFO  livekit  no keys provided, using placeholder keys {"API Key": "devkey", "API Secret": "secret"}
+INFO  livekit  starting LiveKit server {"portHttp": 7880, "rtc.portTCP": 7881, "rtc.portUDP": {"Start":7882,"End":0}}
+```
+
+Never use `--dev` on a server reachable from the internet.
+
+---
+hideInToc: true
+---
+
+# Install ROS Portal
+
+The `.deb` packages are published on GitHub Releases (not in the ROS apt repo yet):
+
+```bash
+# Portal is built against current ROS packages: upgrade first
+sudo apt-get update && sudo apt-get upgrade
+export PORTAL_VERSION=$(
+  curl -s https://api.github.com/repos/livekit/ros-portal/releases/latest \
+  | grep -F "tag_name" \
+  | awk -F\" '{print $4}'
+)
+curl -LO "https://github.com/livekit/ros-portal/releases/download/\
+${PORTAL_VERSION}/\
+ros-${ROS_DISTRO}-livekit-portal_${PORTAL_VERSION#v}-1_$(dpkg --print-architecture).deb"
+sudo apt install ./ros-${ROS_DISTRO}-livekit-portal_*.deb
+```
+
+Installs to `/opt/livekit/ros/<distro>`, an overlay on top of `/opt/ros/<distro>`:
+
+```bash
+$ source /opt/livekit/ros/lyrical/setup.bash
+$ ros2 pkg prefix ros_portal
+/opt/livekit/ros/lyrical/ros_portal
+```
+
+<!--
+If ros_portal_node dies with "symbol lookup error ... undefined symbol",
+the ROS packages are older than the ones the .deb was built against: run
+apt-get upgrade. As of Nov 2026 (v0.3.0) the livekit/ros-portal:lyrical
+Docker image has this problem, so use the .deb on Lyrical.
+-->
+
+---
+hideInToc: true
+---
+
+# Create tokens
+
+Each ROS Portal joins the room with its own identity:
+
+```bash
+export LIVEKIT_URL=ws://127.0.0.1:7880
+
+lk token create \
+  --join \
+  --room turtle_room \
+  --identity turtle_sim \
+  --allow-update-metadata \
+  --valid-for 24h \
+  --token-only \
+  --yes \
+  --dev
+```
+
+- `--dev` signs the token with the dev server's `devkey` / `secret`
+- For LiveKit Cloud, drop `--dev`, set `LIVEKIT_URL=wss://<project>.livekit.cloud`, and export `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET`
+- ROS Portal reads only `LIVEKIT_URL` and `LIVEKIT_TOKEN`
+- In production, use `LIVEKIT_TOKEN_ENDPOINT` to fetch tokens from your own backend
+
+---
+hideInToc: true
+---
+
+# Configure the robot side
+
+`direction` is from the point of view of the ROS graph: `out` sends to LiveKit, `in` receives from LiveKit. Topic patterns are regular expressions.
+
+```bash
+mkdir -p ~/livekit
+cat >~/livekit/turtle_sim.yaml <<'EOF'
+ros_portal:
+  version: "0.0.1"
+  topics:
+    # Velocity commands from the operator (LiveKit -> ROS)
+    - topic: "/turtle.*/cmd_vel"
+      direction: "in"
+    # Pose telemetry to the operator (ROS -> LiveKit)
+    - topic: "/turtle.*/pose"
+      direction: "out"
+    # sensor_msgs/Image topics are sent as video tracks
+    - topic: "/image"
+      direction: "out"
+EOF
+```
+
+Without `config_path`, ROS Portal forwards every topic in both directions.
+
+---
+hideInToc: true
+---
+
+# Configure the operator side
+
+The mirror image of the robot config, plus a service route:
+
+```bash
+cat >~/livekit/controller.yaml <<'EOF'
+ros_portal:
+  version: "0.0.1"
+  topics:
+    - topic: "/turtle.*/cmd_vel"
+      direction: "out"
+    - topic: "/turtle.*/pose"
+      direction: "in"
+    # Video track names must match exactly (no regex)
+    - topic: "/image"
+      direction: "in"
+  services:
+    # Creates a local service that forwards calls to turtle_sim
+    - service: "/turtle1/teleport_absolute"
+      direction: "out"
+      participant: "turtle_sim"
+      msg_type: "turtlesim_msgs/srv/TeleportAbsolute"
+EOF
+```
+
+In Lyrical, turtlesim's interfaces live in the `turtlesim_msgs` package.
+
+---
+hideInToc: true
+---
+
+# Start the robot side
+
+Each block in its own terminal (or tmux pane):
+
+```bash
+sudo apt-get install ros-lyrical-turtlesim ros-lyrical-image-tools
+export ROS_DOMAIN_ID=42
+ros2 run turtlesim turtlesim_node   # add `-platform offscreen` if headless
+```
+
+```bash
+export ROS_DOMAIN_ID=42
+ros2 run image_tools cam2image --ros-args -p burger_mode:=true
+```
+
+```bash
+export ROS_DOMAIN_ID=42
+source /opt/livekit/ros/lyrical/setup.bash
+export LIVEKIT_URL=ws://127.0.0.1:7880
+export LIVEKIT_TOKEN=$(lk token create --join --room turtle_room \
+  --identity turtle_sim --allow-update-metadata --valid-for 24h \
+  --token-only --yes --dev)
+ros2 launch ros_portal ros_portal.launch.py \
+  config_path:=$HOME/livekit/turtle_sim.yaml
+```
+
+---
+hideInToc: true
+---
+
+# Start the operator side
+
+```bash
+export ROS_DOMAIN_ID=100
+source /opt/livekit/ros/lyrical/setup.bash
+export LIVEKIT_URL=ws://127.0.0.1:7880
+export LIVEKIT_TOKEN=$(lk token create --join --room turtle_room \
+  --identity controller --allow-update-metadata --valid-for 24h \
+  --token-only --yes --dev)
+ros2 launch ros_portal ros_portal.launch.py \
+  config_path:=$HOME/livekit/controller.yaml
+```
+
+The robot's topics now appear in the operator's graph:
+
+```bash
+# [INFO] [ros_portal.connection]: Connected to LiveKit room 'turtle_room' ...
+$ export ROS_DOMAIN_ID=100
+$ ros2 topic list
+/diagnostics
+/image
+/parameter_events
+/rosout
+/turtle1/pose
+```
+
+---
+hideInToc: true
+---
+
+# Drive the turtle over LiveKit
+
+From the operator domain, use the normal ROS tools:
+
+```bash
+export ROS_DOMAIN_ID=100
+
+# Watch the pose coming from the robot
+ros2 topic echo /turtle1/pose
+
+# Drive in a circle
+ros2 topic pub /turtle1/cmd_vel geometry_msgs/msg/Twist \
+  "{linear: {x: 2.0}, angular: {z: 1.8}}"
+
+# Call the robot's service through the configured route
+ros2 service call /turtle1/teleport_absolute \
+  turtlesim_msgs/srv/TeleportAbsolute "{x: 5.0, y: 5.0, theta: 0.0}"
+```
+
+Or with the keyboard:
+
+```bash
+sudo apt-get install ros-lyrical-teleop-twist-keyboard
+ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+  --ros-args -r cmd_vel:=/turtle1/cmd_vel
+```
+
+---
+hideInToc: true
+---
+
+# Run ros2 commands on the remote robot
+
+ROS Portal exposes services that run `ros2` commands on another participant's graph, with no config needed:
+
+```bash
+export ROS_DOMAIN_ID=100
+ros2 service call /ros_portal/ros2_topic_list \
+  ros_portal_msgs/srv/Ros2TopicList \
+  "{participant_id: turtle_sim, show_types: true}"
+
+ros2 service call /ros_portal/ros2_service_call \
+  ros_portal_msgs/srv/Ros2ServiceCall \
+  "{participant_id: turtle_sim, service: /spawn, msg_type: turtlesim_msgs/srv/Spawn,
+    payload: '{x: 2.0, y: 2.0, theta: 0.0, name: turtle2}'}"
+```
+
+```
+output='/image [sensor_msgs/msg/Image]\n/turtle1/cmd_vel [geometry_msgs/msg/Twist]\n...'
+output='name: turtle2'
+```
+
+Also available: `ros2_service_list`, `ros2_interface_show`, `ros2_topic_pub`.
+
+---
+hideInToc: true
+---
+
+# Video
+
+The robot's `sensor_msgs/Image` topic is sent as a WebRTC video track and arrives on the operator as a JPEG `sensor_msgs/CompressedImage`:
+
+```bash
+$ export ROS_DOMAIN_ID=100
+$ ros2 topic info /image
+Type: sensor_msgs/msg/CompressedImage
+Publisher count: 1
+
+$ ros2 topic hz /image
+average rate: 10.401
+```
+
+- Outbound images must be `rgb8`, `bgr8`, `rgba8`, `bgra8`, or `mono8`, or a JPEG `CompressedImage`
+- The track resolution is fixed by the first frame
+- The operator's portal pauses the track when nothing subscribes to `/image`
+- `video_sources` in the config can stream a camera straight from a GStreamer pipeline (e.g. `v4l2src`) without going through ROS
+
+---
+hideInToc: true
+---
+
+# Going to production
+
+- **Server**: LiveKit Cloud, or self-host with real API keys, TLS (`wss://`), and open media ports
+- **Tokens**: point robots at a token endpoint (`LIVEKIT_TOKEN_ENDPOINT`) instead of long-lived tokens
+- **Bandwidth**: forward only what you need. Use `direction`, and `max_rate_hz` to throttle high-rate topics
+- **Static data**: mark `/tf_static` with `latched: true` so late joiners still get it
+- **Composition**: `ros_portal_composable.launch.py` loads the portal into a component container for zero-copy with camera drivers
+- **Docker**: `livekit/ros-portal:<distro>` images exist; run with `--network host` so DDS can see the robot's graph. As of v0.3.0 the `lyrical` image is built on outdated ROS packages and the node fails to start, so use the `.deb` on Lyrical
