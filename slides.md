@@ -1653,6 +1653,359 @@ Set the networking variables in one place (a sourced env file, systemd `Environm
 layout: section
 ---
 
+# GPUs for ROS
+
+<br>
+<br>
+<Link to="toc" title="Table of Contents"/>
+
+---
+hideInToc: true
+zoom: 0.85
+---
+
+# What a GPU is good at
+
+A CPU has a few fast cores for branching, sequential work. A GPU has thousands of simple cores that run the **same instruction on lots of data** at once.
+
+| | CPU (host) | RTX 3060 Ti (our test GPU) |
+|---|---|---|
+| Cores | 6 to 16 | 38 SMs × 128 = 4,864 CUDA cores |
+| Memory | System RAM, large | 8 GB VRAM, ~450 GB/s |
+| Good at | Control flow, I/O, small tasks | Matrices, pixels, points, neural networks |
+
+- Data has to be **copied** between system RAM and VRAM over PCIe, which is slow compared to either memory
+- Work is launched as **kernels**: small functions run by thousands of threads
+- GPUs also have fixed-function blocks: video encode/decode (NVENC/NVDEC, VA-API), ray tracing, tensor cores
+
+The art of GPU programming is keeping data on the GPU and giving it enough work at once.
+
+---
+hideInToc: true
+zoom: 0.72
+---
+
+# Why ROS uses GPUs
+
+| Workload | Examples |
+|---|---|
+| Perception / AI inference | Object detection, segmentation, depth from stereo, VLA and LLM models |
+| Point clouds | Voxel filtering, registration, ground removal on lidar data |
+| Mapping and SLAM | Visual odometry, nvblox, dense reconstruction |
+| Simulation | Gazebo sensor rendering, Isaac Sim (RTX only) |
+| Video | Compress camera streams for recording or remote teleop (LiveKit) |
+
+We already saw it in this course: Gazebo rendering on the GPU instead of the CPU
+
+| Where | Rendering | `gz-sim-main` CPU |
+|---|---|---|
+| Docker on the host, no EGL vendor file | CPU (Mesa) | 164% |
+| Docker on the host, NVIDIA EGL | GPU | 89% |
+| Course VM, no GPU | CPU (`LIBGL_ALWAYS_SOFTWARE=1`) | 107% |
+| Course VM, GPU passed through | GPU | 47% |
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# The GPU software stack
+
+| Layer | NVIDIA | AMD | Intel | Apple |
+|---|---|---|---|---|
+| Kernel driver | `nvidia` (open or proprietary modules) | `amdgpu` (in Linux) | `i915` / `xe` (in Linux) | Built into macOS |
+| Compute | **CUDA** | **ROCm / HIP** | oneAPI / SYCL, OpenVINO | **Metal** |
+| AI libraries | cuDNN, TensorRT | MIOpen, MIGraphX | OpenVINO | Core ML, MPS |
+| Graphics | OpenGL/Vulkan (NVIDIA driver) | OpenGL/Vulkan (Mesa) | OpenGL/Vulkan (Mesa) | Metal (OpenGL deprecated) |
+| Video | NVENC / NVDEC | VA-API | VA-API, QSV | VideoToolbox |
+| Monitoring | `nvidia-smi`, `nvtop` | `amd-smi`, `nvtop` | `intel_gpu_top`, `nvtop` | Activity Monitor, `ioreg` |
+
+Portable options exist (OpenCL, Vulkan compute, ONNX Runtime and PyTorch with multiple backends), but most robotics GPU code is written for **CUDA**.
+
+---
+hideInToc: true
+zoom: 0.85
+---
+
+# Why ROS looks NVIDIA-first
+
+ROS itself is vendor-neutral. The **ecosystem** around it leans NVIDIA:
+
+- **Jetson** (Orin, Thor) is the most common embedded computer with a serious GPU on robots, so code written for robots targets CUDA
+- **Isaac ROS** (5.1, Lyrical): GPU-accelerated ROS packages for stereo, visual SLAM, nvblox, DNN inference. Runs only on NVIDIA: Jetson, or x86 with an Ampere+ GPU, Ubuntu 24.04, driver 595+
+- **Isaac Sim** needs an NVIDIA RTX GPU
+- **CUDA's head start**: PyTorch, TensorRT, OpenCV CUDA, PCL GPU, most research code
+- Most ROS GPU tutorials, Docker images and Discourse answers assume `--gpus all`
+
+The counterweight is moving into ROS itself:
+
+- Lyrical's **`rosidl::Buffer` backends** let a message carry data in "vendor-specific memory domains such as GPU memory", so a GPU image can go between nodes without a copy to the CPU. The CUDA backend is community-maintained; other vendors can write backends
+- Isaac ROS 5.0 dropped its own NVIDIA-only transport (NITROS) in favour of `rosidl::Buffer`
+- Gazebo, RViz and Nav2 run on any GPU with OpenGL, or none
+
+---
+hideInToc: true
+---
+
+# AMD GPUs
+
+- **Graphics** just works: the `amdgpu` kernel driver and Mesa are in Ubuntu, so Gazebo, RViz and Foxglove run well
+- **Compute** is **ROCm**, with **HIP** as the CUDA-like API (`hipify` converts CUDA source)
+- PyTorch has ROCm builds, and ONNX Runtime has ROCm/MIGraphX backends
+- Check the support matrix before buying: ROCm 7.14 lists consumer cards like the RX 7900 XTX and RX 9070, but only on Ubuntu 24.04 and 22.04. Data center: Instinct MI300/MI350
+- No Isaac ROS or Isaac Sim equivalent; fewer ROS packages with GPU code paths
+
+```bash
+# Docker: pass the compute and render devices (from the ROCm docs)
+docker run -it --rm --device /dev/kfd --device /dev/dri <image>
+amd-smi list          # monitoring; nvtop also supports AMD
+```
+
+Not tested here: our hardware is NVIDIA and Intel.
+
+---
+hideInToc: true
+zoom: 0.8
+---
+
+# Apple silicon: Metal
+
+- GPU and CPU share **unified memory**: no PCIe copies, and large models fit (our M4 iMac: 10 GPU cores, 32 GB shared)
+- **Metal** is the API; PyTorch uses it through the `mps` device, and Core ML runs inference
+- **No CUDA**: CUDA-only ROS packages don't build
+- **ROS 2 on macOS** is Tier 3 on Intel Macs only; Apple silicon isn't listed, so you build from source on your own
+- **Docker Desktop** runs an arm64 Linux VM with no GPU device: containers can't use Metal
+
+```bash
+$ docker run --rm ubuntu:24.04 sh -c "ls /dev/dri; uname -m"
+ls: cannot access '/dev/dri': No such file or directory
+aarch64
+```
+
+```bash
+# GPU utilization on a Mac, no sudo needed
+$ ioreg -r -d 1 -w 0 -c IOAccelerator | grep -oE '"Device Utilization %"=[0-9]+'
+"Device Utilization %"=44
+```
+
+In practice a Mac is a great machine for Foxglove, simulation viewers and model work, with ROS itself running in a Linux VM or on the robot.
+
+---
+hideInToc: true
+zoom: 0.9
+---
+
+# Install the NVIDIA driver on Ubuntu 26.04
+
+```bash
+$ sudo ubuntu-drivers devices
+model    : GA104 [GeForce RTX 3060 Ti Lite Hash Rate]
+driver   : nvidia-driver-595-open - distro non-free recommended
+
+$ sudo ubuntu-drivers install nvidia:595-open      # 69 s in our VM
+$ sudo reboot
+$ nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv
+NVIDIA GeForce RTX 3060 Ti, 595.99.02, 8192 MiB
+```
+
+- `-open`: NVIDIA's open-source kernel modules, recommended for Turing (RTX 20) and newer
+- `ubuntu-drivers` installs **Canonical-signed** modules (`linux-modules-nvidia-595-open-*`), so they load with **Secure Boot on** (tested in the VM)
+- `-server` variants track data-center release branches
+- The driver alone runs CUDA programs. To **build** CUDA code you need the toolkit:
+  - `apt install nvidia-cuda-toolkit`: Ubuntu's package, CUDA **12.4**
+  - NVIDIA's apt repo: current CUDA **13.5**, which lists Ubuntu 26.04 as supported
+
+---
+hideInToc: true
+---
+
+# First CUDA program
+
+```cpp
+__global__ void add(const float *a, const float *b, float *c, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;   // one thread per element
+  if (i < n) c[i] = a[i] + b[i];
+}
+
+int main() {
+  const int n = 1 << 24;
+  float *a, *b, *c;
+  cudaMallocManaged(&a, n * sizeof(float));        // visible to CPU and GPU
+  ...
+  add<<<(n + 255) / 256, 256>>>(a, b, c, n);       // 65,536 blocks of 256 threads
+  cudaDeviceSynchronize();
+}
+```
+
+```bash
+$ nvcc -o vadd vadd.cu && ./vadd
+NVIDIA GeForce RTX 3060 Ti: 38 SMs, c[0]=3.0 c[n-1]=3.0
+```
+
+Full source in `examples/vadd.cu`. The binary ran unchanged inside the VM with only the driver installed: `nvcc` links the CUDA runtime statically.
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# GPUs in Docker
+
+```bash
+# NVIDIA: needs the NVIDIA Container Toolkit on the host
+docker run --rm --gpus all ubuntu:26.04 nvidia-smi -L
+docker run --rm --device nvidia.com/gpu=all ubuntu:26.04 nvidia-smi -L     # CDI names
+docker run --rm --gpus device=0 -e NVIDIA_DRIVER_CAPABILITIES=utility ubuntu:26.04 nvidia-smi
+
+# Intel / AMD graphics and video: pass the render node
+docker run --rm --device /dev/dri/renderD129 <image> vainfo
+```
+
+```
+GPU 0: NVIDIA GeForce RTX 3060 Ti (UUID: GPU-0e57e4fa-3bd7-d89a-7b94-47893706b002)
+```
+
+- Without GPU flags the container has no `/dev/nvidia*` and no `nvidia-smi`
+- `nvidia-ctk cdi list` shows the CDI names: `nvidia.com/gpu=0`, `=<UUID>`, `=all`
+- `NVIDIA_DRIVER_CAPABILITIES` picks which driver libraries are mounted: `compute,utility` by default; add `graphics` for OpenGL/EGL (Gazebo), `video` for NVENC/NVDEC, or use `all`
+- Capabilities don't go in `--gpus`: `--gpus "device=0,capabilities=utility"` fails with `unknown device`
+- Render node numbers aren't fixed: on our host `renderD128` is NVIDIA and `renderD129` is Intel. Use `/dev/dri/by-path/pci-0000:00:02.0-render`
+- Gazebo's EGL in a container also needs `10_nvidia.json` (see the simulation section)
+
+---
+hideInToc: true
+zoom: 0.72
+---
+
+# GPUs in VMs: the options
+
+| Approach | What the VM gets | CUDA in the VM? | Notes |
+|---|---|---|---|
+| None (default) | Virtual display only | No | Software rendering, as in our course VM |
+| virtio-gpu with virgl/Venus | Accelerated OpenGL/Vulkan through the host | No | Host keeps the GPU; good for desktops and RViz |
+| **PCI passthrough (VFIO)** | The whole physical GPU | **Yes** | Host loses the GPU while the VM runs |
+| NVIDIA vGPU | A slice of a data-center GPU | Yes | Licensed, data-center GPUs only |
+| SR-IOV | A hardware-partitioned slice | Yes | Some Intel iGPUs and AMD/NVIDIA data-center GPUs |
+
+We tested no GPU and passthrough; the other rows are from vendor documentation.
+
+Passthrough needs:
+
+- IOMMU on (Intel VT-d / AMD-Vi), which our libvirt host setup already checks
+- The GPU in an IOMMU group with nothing the host still needs
+- Nothing on the host using the GPU (display manager, containers)
+
+---
+hideInToc: true
+zoom: 0.85
+---
+
+# GPU passthrough: what happened on our host
+
+```bash
+$ virsh start ubuntu-server-2604
+error: ... vfio 0000:01:00.0: group 2 is not viable
+Please ensure all devices within the iommu_group are bound to their vfio bus driver.
+```
+
+```bash
+$ for d in /sys/kernel/iommu_groups/2/devices/*; do lspci -nns ${d##*/}; done
+00:01.0 PCI bridge: Intel ... PCIe Controller (x16)
+00:01.2 PCI bridge: Intel ... PCIe Controller (x4)
+01:00.0 VGA compatible controller: NVIDIA ... RTX 3060 Ti
+01:00.1 Audio device: NVIDIA ... High Definition Audio Controller
+02:00.0 Non-Volatile memory controller: Samsung ... SSD 970 EVO Plus
+```
+
+The CPU splits its 16 lanes between the GPU slot (x8) and an NVMe (x4) and can't isolate them, so **the SSD is in the GPU's group**. It worked once the unmounted SSD was also detached from the host:
+
+```bash
+sudo systemctl stop gdm                         # release the GPU on the host
+virsh nodedev-detach pci_0000_02_00_0           # the SSD goes to vfio too (not given to the VM)
+virsh attach-device ubuntu-server-2604 gpu-hostdev.xml --config   # 01:00.0 and 01:00.1, managed="yes"
+virsh start ubuntu-server-2604
+```
+
+In the VM: `ubuntu-drivers install`, then `nvidia-smi`, CUDA and Gazebo all ran on the GPU (47% CPU vs 107%), and the Nav2 goal succeeded. Pick a board where the GPU slot has its own IOMMU group before planning on passthrough.
+
+---
+hideInToc: true
+---
+
+# Monitoring the GPU
+
+```bash
+nvidia-smi                                   # snapshot: processes, memory, power
+nvidia-smi dmon -s pucm                      # one line per second
+nvidia-smi pmon                              # per process (C = compute, G = graphics)
+nvtop                                        # htop-style, NVIDIA + AMD + Intel; -s for JSON
+sudo intel_gpu_top                           # Intel: per-engine Render/3D, Video, Blitter
+nvidia-smi --query-gpu=utilization.gpu,power.draw,clocks.sm,pcie.link.width.current \
+  --format=csv -l 1                          # pick fields, log every second
+```
+
+```
+# gpu    pwr  gtemp  mtemp     sm    mem    enc    dec    jpg    ofa   mclk   pclk     fb
+# Idx      W      C      C      %      %      %      %      %      %    MHz    MHz     MB
+    0    196     66      -    100     30      0      0      0      0   6801   1650    699
+```
+
+- For fleets: export metrics to Prometheus (NVIDIA DCGM exporter) and graph them with the rest of the robot's telemetry
+- On Jetson: `jtop` (jetson-stats)
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# "100% utilization" doesn't mean fully used
+
+`utilization.gpu` is the "percent of time ... during which one or more kernels was executing", not how much of the GPU was busy. Measured with `examples/gpu_util.py` on the RTX 3060 Ti:
+
+| Workload | Throughput | GPU util | Power |
+|---|---|---|---|
+| Idle | | 0% | 38 W |
+| Tiny 256×256 matmul, sync after each | 34,480/s | **34.5%** | 59 W |
+| Large 8192×8192 matmul, fp32 | 11.3/s | 100% | 197 W |
+| Large 8192×8192 matmul, **fp16** (tensor cores) | **31.0/s** | 100% | 193 W |
+| Camera net, 1 frame per call, CPU preprocessing | 175 fps | 61% | 160 W |
+| Camera net, **16 frames** per call, GPU preprocessing | **512 fps** | 100% | 199 W |
+
+- Tiny kernels look busy while doing almost nothing
+- fp32 and fp16 both read 100%, but fp16 does **2.7×** the work
+- Power draw is the better "is it working hard" signal: 197 W of a 200 W limit
+
+---
+hideInToc: true
+zoom: 0.88
+---
+
+# Keeping the GPU busy
+
+**Find the limit**
+
+```bash
+$ nvidia-smi --format=csv --query-gpu=clocks_event_reasons.active,\
+clocks_event_reasons.sw_power_cap,power.draw,power.limit,clocks.sm,clocks.max.sm
+0x0000000000000004, Active, 196.71 W, 200.00 W, 1665 MHz, 2130 MHz
+```
+
+Under load our GPU is **power capped**: 1,665 MHz of a possible 2,130 MHz. Thermal and power limits show up here, not in "utilization".
+
+**Common fixes**
+
+- **Batch**: process several frames or point clouds per call (2.9× fps above)
+- **Preprocess on the GPU**: copy raw `uint8` bytes, convert and normalize on the GPU
+- **Lower precision**: fp16 / int8 with tensor cores (TensorRT, `torch.autocast`)
+- **Avoid copies**: keep data on the GPU between nodes (`rosidl::Buffer`, composition with intra-process communication)
+- **Don't synchronize** after every small operation
+- **Check the PCIe link**: ours runs Gen3 **x8** of x16 (≈6 GB/s host→GPU), because of the shared lanes on the passthrough slide
+- **Profile**: Nsight Systems (`nsys profile`) shows the gaps where the GPU waits on the CPU
+
+---
+layout: section
+---
+
 # Simulation with Gazebo and Nav2
 
 <br>
