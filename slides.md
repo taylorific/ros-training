@@ -71,7 +71,7 @@ layout: section
 hideInToc: true
 ---
 
-# Install QEMU/KVM on Ubuntu 24.04
+# Install QEMU/KVM on Ubuntu 26.04
 
 Install QEMU/KVM and libvirtd
 
@@ -231,10 +231,9 @@ hideInToc: true
 
 # cloud-init image pool
 
-Note: There is a `--cloud-init` parameter for virt-install to auto-generate the
-cloud-init ISO. However there's currently a bug in virt-install <= 4.1.0 that
-makes it usuable. So we manage the lifecycle manually.
-https://github.com/virt-manager/virt-manager/issues/178
+`virt-install --cloud-init` generates a temporary cloud-init ISO in
+`/var/lib/libvirt/boot`, attaches it for the first boot, then ejects and
+deletes it automatically.
 
 ```bash
 $ virsh pool-define-as \
@@ -320,8 +319,8 @@ hideInToc: true
 # Create directory for config files (optional)
 
 ```bash
-mkdir ubuntu-server-2404
-cd ubuntu-server-2404
+mkdir ubuntu-server-2604
+cd ubuntu-server-2604
 ```
 
 ---
@@ -332,24 +331,24 @@ hideInToc: true
 
 ```bash
 $ curl -LO \
-    https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
-$ qemu-img info noble-server-cloudimg-amd64.img
+    https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img
+$ qemu-img info resolute-server-cloudimg-amd64.img
 ```
 
 ```bash
 $ sudo qemu-img convert \
     -f qcow2 -O qcow2 \
-    noble-server-cloudimg-amd64.img \
-    /var/lib/libvirt/images/ubuntu-server-2404.qcow2
+    resolute-server-cloudimg-amd64.img \
+    /var/lib/libvirt/images/ubuntu-server-2604.qcow2
 $ sudo qemu-img resize -f qcow2 \
-    /var/lib/libvirt/images/ubuntu-server-2404.qcow2 \
+    /var/lib/libvirt/images/ubuntu-server-2604.qcow2 \
     64G
 ```
 
 <!--
 ```
 curl -LO \
-  https://crake-nexus.org.boxcutter.net/repository/ubuntu-cloud-images-proxy/noble/current/noble-server-cloudimg-amd64.img
+  https://crake-nexus.org.boxcutter.net/repository/ubuntu-cloud-images-proxy/resolute/current/resolute-server-cloudimg-amd64.img
 ```
 -->
 
@@ -357,14 +356,12 @@ curl -LO \
 hideInToc: true
 ---
 
-# Define login parameters for cloud-init ISO (1 of 2)
+# Define login parameters for cloud-init (1 of 2)
 
 ```bash
-touch network-config
-
 cat >meta-data <<EOF
-instance-id: ubuntu-server-2404
-local-hostname: ubuntu-server-2404
+instance-id: ubuntu-server-2604
+local-hostname: ubuntu-server-2604
 EOF
 ```
 
@@ -372,12 +369,12 @@ EOF
 hideInToc: true
 ---
 
-# Define login parameters for cloud-init ISO (2 of 2)
+# Define login parameters for cloud-init (2 of 2)
 
 ```bash
 cat >user-data <<EOF
 #cloud-config
-hostname: ubuntu-server-2404
+hostname: ubuntu-server-2604
 users:
   - name: autobot
     uid: 63112
@@ -405,61 +402,29 @@ EOF
 hideInToc: true
 ---
 
-# Generate cloud-init ISO
-
-```bash
-sudo apt-get update
-sudo apt-get install genisoimage
-```
-
-```bash
-$ genisoimage \
-    -input-charset utf-8 \
-    -output ubuntu-server-2404-cloud-init.img \
-    -volid cidata -rational-rock -joliet \
-    user-data meta-data network-config
-
-sudo cp ubuntu-server-2404-cloud-init.img \
-  /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso
-```
-
-Alternative way with cloud-localds:
-
-```bash
-sudo apt-get update
-sudo apt-get install cloud-image-utils
-```
-
-```bash
-sudo cloud-localds \
-  /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso \
-  user-data meta-data \
-  --verbose
-```
-
----
-hideInToc: true
----
-
 # Spin up image and configure with cloud-init
+
+`--cloud-init` builds the cloud-init ISO from `user-data` and `meta-data` for you.
 
 ```bash
 virt-install \
   --connect qemu:///system \
-  --name ubuntu-server-2404 \
+  --name ubuntu-server-2604 \
   --boot uefi \
   --memory 8192 \
   --vcpus 2 \
-  --os-variant ubuntu24.04 \
-  --disk /var/lib/libvirt/images/ubuntu-server-2404.qcow2,bus=virtio \
-  --disk /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso,device=cdrom \
+  --os-variant ubuntu-lts-latest \
+  --disk /var/lib/libvirt/images/ubuntu-server-2604.qcow2,bus=virtio \
+  --cloud-init user-data=user-data,meta-data=meta-data \
   --network network=default,model=virtio \
   --graphics spice \
   --noautoconsole \
   --console pty,target_type=serial \
-  --import \
-  --debug
+  --import
 ```
+
+`ubuntu26.04` isn't in the osinfo database yet, so use `ubuntu-lts-latest`
+(see `virt-install --osinfo list | grep ubuntu`).
 
 ---
 hideInToc: true
@@ -469,37 +434,40 @@ hideInToc: true
 
 ```bash
 # Command line console
-virsh console ubuntu-server-2404
+virsh console ubuntu-server-2604
 
 # Graphical console
-virt-viewer ubuntu-server-2404
+virt-viewer ubuntu-server-2604
 ```
 
 ---
 hideInToc: true
 ---
 
-# Disable cloud-init and remove cloud-init ISO
+# First boot
 
-In the guest:
+cloud-init runs on the first boot, installs `qemu-guest-agent`, then reboots.
+virt-install treats that first boot as the install, so the VM powers off
+instead of restarting. virt-install also ejects and deletes the generated
+cloud-init ISO.
+
 ```bash
-# login with autobot user
-$ cloud-init status --wait
-status: done
+$ virsh domstate ubuntu-server-2604
+shut off
+$ virsh domblklist ubuntu-server-2604
+ Target   Source
+------------------------------------------------------------
+ vda      /var/lib/libvirt/images/ubuntu-server-2604.qcow2
+ sda      -
 
-# Disable cloud-init
-$ sudo touch /etc/cloud/cloud-init.disabled
-
-$ cloud-init status
-status: disabled
-$ sudo shutdown -h now
+$ virsh start ubuntu-server-2604
 ```
 
-On the host
+In the guest, cloud-init disables itself because its data source is gone:
+
 ```bash
-$ virsh domblklist ubuntu-server-2404
-$ virsh change-media ubuntu-server-2404 sda --eject
-$ sudo rm /var/lib/libvirt/boot/ubuntu-server-2404-cloud-init.iso
+$ cloud-init status
+status: disabled
 ```
 
 
@@ -510,17 +478,17 @@ hideInToc: true
 # Snapshots
 
 ```bash
-$ virsh snapshot-create-as --domain ubuntu-server-2404 --name clean --description "Initial install"
-$ virsh snapshot-list ubuntu-server-2404
-$ virsh snapshot-revert ubuntu-server-2404 clean
-$ virsh snapshot-delete ubuntu-server-2404 clean
+$ virsh snapshot-create-as --domain ubuntu-server-2604 --name clean --description "Initial install"
+$ virsh snapshot-list ubuntu-server-2604
+$ virsh snapshot-revert ubuntu-server-2604 clean
+$ virsh snapshot-delete ubuntu-server-2604 clean
 ```
 
 # Cleanup
 
 ```bash
-$ virsh shutdown ubuntu-server-2404
-$ virsh undefine ubuntu-server-2404 --nvram --remove-all-storage
+$ virsh shutdown ubuntu-server-2604
+$ virsh undefine ubuntu-server-2604 --nvram --remove-all-storage
 ```
 
 ---
@@ -532,20 +500,20 @@ hideInToc: true
 Preferred - use qemu-guest-agent
 
 ```bash
-virsh start ubuntu-server-2404
+virsh start ubuntu-server-2604
 
 virsh list --all
 ```
 
 ```
-$ virsh domifaddr ubuntu-server-2404 --source agent
+$ virsh domifaddr ubuntu-server-2604 --source agent
 ```
 
 ---
 layout: section
 ---
 
-# Install ROS 2 Jazzy on Ubuntu 24.04
+# Install ROS 2 Lyrical on Ubuntu 26.04
 
 <br>
 <br>
@@ -624,11 +592,11 @@ sudo install -m 644 \
   /usr/share/keyrings/
 # Point at a local mirror
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] \
-http://mirror.local/ros2 noble main" | \
+http://mirror.local/ros2 resolute main" | \
 sudo tee /etc/apt/sources.list.d/ros2.list
 
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] \
-http://crake-nexus.org.boxcutter.net/repository/ros-apt-proxy noble main" | \
+http://crake-nexus.org.boxcutter.net/repository/ros-apt-proxy resolute main" | \
 sudo tee /etc/apt/sources.list.d/ros2.list
 ```
 
@@ -645,9 +613,9 @@ sudo apt-get install ros-dev-tools
 sudo apt-get update
 sudo apt-get upgrade
 # Desktop install
-sudo apt-get install ros-jazzy-desktop
+sudo apt-get install ros-lyrical-desktop
 # Bare bones
-sudo apt-get install ros-jazzy-ros-base
+sudo apt-get install ros-lyrical-ros-base
 ```
 
 ---
@@ -657,7 +625,7 @@ hideInToc: true
 # Uninstall
 
 ```bash
-sudo apt-get remove ~nros-jazzy-*
+sudo apt-get remove ~nros-lyrical-*
 sudo apt-get autoremove
 
 # Remove the repository
@@ -679,31 +647,31 @@ sudo su - ros
 ```
 
 ```bash
-$ source /opt/ros/jazzy/setup.bash
+$ source /opt/ros/lyrical/setup.bash
 $ which ros2
-/opt/ros/jazzy/bin/ros2
+/opt/ros/lyrical/bin/ros2
 
 $ ros2
 ```
 
 ```bash
-grep -qxF 'source /opt/ros/jazzy/setup.bash' ~/.bashrc || \
-  echo 'source /opt/ros/jazzy/setup.bash' >> ~/.bashrc
+grep -qxF 'source /opt/ros/lyrical/setup.bash' ~/.bashrc || \
+  echo 'source /opt/ros/lyrical/setup.bash' >> ~/.bashrc
 ```
 
 ---
 hideInToc: true
 ---
 
-# /opt/ros/jazzy/setup.bash explained
+# /opt/ros/lyrical/setup.bash explained
 
-`source /opt/ros/jazzy/setup.bash` activates a ROS 2 environment for the current shell session. It's the same idea as activating a Python virtual environment, but for ROS.
+`source /opt/ros/lyrical/setup.bash` activates a ROS 2 environment for the current shell session. It's the same idea as activating a Python virtual environment, but for ROS.
 
 The `setup.bash` script adds the ROS tools to your PATH:
 
 ```bash
 $ echo $PATH
-/opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+/opt/ros/lyrical/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 ```
 
 The script also defines environment variables like:
@@ -849,12 +817,12 @@ colcon build \
   --packages-select \
   hello_python_pkg
 
-# with `source /opt/ros/jazzy/setup.bash`
-# AMENT_PREFIX_PATH=/opt/ros/jazzy
+# with `source /opt/ros/lyrical/setup.bash`
+# AMENT_PREFIX_PATH=/opt/ros/lyrical
 ros2 pkg list | grep hello_python_pkg
 
 source ~/ros2_ws/install/setup.bash
-# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_python_pkg:/opt/ros/jazzy
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_python_pkg:/opt/ros/lyrical
 ros2 pkg list | grep hello_python_pkg
 ```
 
@@ -869,21 +837,25 @@ hideInToc: true
 - `setup.cfg` is required when a package has executables, so `ros2 run` can find them
 - `setup.py` containing instructions for how to install the package
 - `<package_name>` - a directory with the same name as your package, used by ROS 2 tools to find your package, contains `__init__.py`
+- `<package_name>/py.typed` - marker file declaring the package ships type hints (checked by the generated `test_mypy.py`)
 
 ```
 /home/ros/ros2_ws/src/hello_python_pkg
 ├── LICENSE
 ├── hello_python_pkg
-│   └── __init__.py
+│   ├── __init__.py
+│   └── py.typed
 ├── package.xml
 ├── resource
-│   └── hello_python_pkg
+│   └── hello_python_pkg
 ├── setup.cfg
 ├── setup.py
 └── test
     ├── test_copyright.py
     ├── test_flake8.py
-    └── test_pep257.py
+    ├── test_mypy.py
+    ├── test_pep257.py
+    └── test_xmllint.py
 ```
 
 ---
@@ -904,12 +876,12 @@ colcon build \
   --packages-select \
   hello_cpp_pkg
 
-# with `source /opt/ros/jazzy/setup.bash`
-# AMENT_PREFIX_PATH=/opt/ros/jazzy
+# with `source /opt/ros/lyrical/setup.bash`
+# AMENT_PREFIX_PATH=/opt/ros/lyrical
 ros2 pkg list | grep hello_cpp_pkg
 
 source ~/ros2_ws/install/setup.bash
-# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/jazzy
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/lyrical
 ros2 pkg list | grep hello_cpp_pkg
 ```
 
@@ -989,7 +961,7 @@ EOF
 ```bash
 chmod +x ~/ros2_ws/src/hello_python_pkg/hello_python_pkg/hello_python_node.py
 $ ls ~/ros2_ws/src/hello_python_pkg/hello_python_pkg
-__init__.py  hello_node.py
+__init__.py  hello_python_node.py  py.typed
 ```
 
 ---
@@ -1013,6 +985,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
+    package_data={'': ['py.typed']},
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ros',
@@ -1043,7 +1016,7 @@ hideInToc: true
 cd ~/ros2_ws
 colcon build --packages-select hello_python_pkg
 source ~/ros2_ws/install/setup.bash
-# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/jazzy
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_python_pkg:/opt/ros/lyrical
 $ ros2 run hello_python_pkg hello_python_node
 [INFO] [1764903922.188898944] [hello_node]: Hello, world!
 ```
@@ -1080,7 +1053,7 @@ hideInToc: true
 
 ```bash
 cat >~/ros2_ws/src/hello_cpp_pkg/CMakeLists.txt <<'EOF'
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.20)
 project(hello_cpp_pkg)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -1092,7 +1065,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 
 add_executable(hello_cpp_node src/hello_cpp_node.cpp)
-ament_target_dependencies(hello_cpp_node rclcpp)
+target_link_libraries(hello_cpp_node PUBLIC rclcpp::rclcpp)
 
 install(TARGETS
   hello_cpp_node
@@ -1113,7 +1086,7 @@ hideInToc: true
 cd ~/ros2_ws
 colcon build --packages-select hello_cpp_pkg
 source ~/ros2_ws/install/setup.bash
-# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/jazzy
+# AMENT_PREFIX_PATH=/home/ros/ros2_ws/install/hello_cpp_pkg:/opt/ros/lyrical
 $ ros2 run hello_cpp_pkg hello_cpp_node
 [INFO] [1764904714.200800158] [hello_cpp_node]: Hello, world!
 ```
@@ -1228,8 +1201,8 @@ Example (very common pattern):
 repositories:
   navigation2:
     type: git
-    url: https://github.com/ros-planning/navigation2.git
-    version: humble
+    url: https://github.com/ros-navigation/navigation2.git
+    version: lyrical
   slam_toolbox:
     type: git
     url: https://github.com/SteveMacenski/slam_toolbox.git
